@@ -39,3 +39,10 @@ The AI Study Companion will explore features such as:
 ## Project Status
 
 Currently in **Sprint 1**.
+
+## Continuous integration
+
+GitHub Actions runs the repository checks on every push and pull request using
+`.github/workflows/ci.yml`. The project currently contains its planning
+README; application source and a staging deployment target still need to be
+added before the staging acceptance criterion can be met.
