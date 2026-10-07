@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NoteWorthy · PDF study companion</title>
+<style>
+  :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; background: #f5f4f0; color: #16211d; }
+  body { max-width: 900px; margin: 0 auto; padding: 32px 18px 70px; }
+  header { border-bottom: 1px solid #cad4ca; margin-bottom: 32px; }
+  h1 { font-size: clamp(2rem, 5vw, 3.5rem); margin: 0 0 8px; letter-spacing: -.04em; }
+  h2 { font-size: 1.3rem; margin-top: 0; }
+  .eyebrow { color: #28725b; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; font-size: .75rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+  section { background: white; border: 1px solid #d9dfd8; border-radius: 16px; padding: 22px; box-shadow: 0 5px 20px #1a33210a; }
+  label { display: block; font-weight: 650; margin-bottom: 8px; }
+  input, button { font: inherit; }
+  input[type=text] { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #aebdb1; border-radius: 8px; }
+  input[type=file] { max-width: 100%; }
+  button { border: 0; border-radius: 8px; background: #226d54; color: white; padding: 11px 16px; cursor: pointer; margin-top: 12px; }
+  button:disabled { opacity: .55; cursor: default; }
+  .muted { color: #52635a; }
+  #answer { white-space: pre-wrap; font-size: 1.08rem; }
+  .source { padding: 14px 0; border-top: 1px solid #e2e8e2; }
+  .source strong { color: #226d54; }
+  #status { min-height: 1.5em; }
+  .quiz-question { border-top: 1px solid #e2e8e2; padding: 18px 0; }
+  .quiz-question label { font-weight: 400; margin: 6px 0; }
+  .scorebar { margin: 10px 0; }
+  .scorebar span { display: block; height: 8px; border-radius: 8px; background: #64b596; }
+</style>
+<header><p class="eyebrow">NoteWorthy / Sprint 1 prototype</p><h1>Ask your notes.</h1><p class="muted">Upload one typed PDF, ask a question, and inspect the passages behind the answer.</p></header>
+<main class="grid">
+  <section><h2>Your PDF</h2><label for="pdf">Choose a typed PDF</label><input id="pdf" type="file" accept="application/pdf,.pdf"><br><button id="upload">Upload PDF</button><p id="status" role="status" class="muted"></p><div id="documents"></div></section>
+  <section><h2>Ask a question</h2><label for="question">Question</label><input id="question" type="text" placeholder="What does the document say about…?"><button id="ask" disabled>Find answer</button><p id="answer" aria-live="polite"></p></section>
+</main>
+<section style="margin-top:18px"><h2>Source passages</h2><div id="sources" class="muted">Sources for the answer appear here.</div></section>
+<section style="margin-top:18px"><h2>Practice quiz</h2><p class="muted">Five questions generated from the uploaded PDF. Each answer links to its source paragraph.</p><button id="makeQuiz" disabled>Generate five questions</button><div id="quiz"></div><p id="quizResult" role="status"></p></section>
+<section style="margin-top:18px"><h2>Scores by topic</h2><div id="topicScores"></div></section>
+<script>
+  let selectedDocument = null;
+  let currentQuiz = [];
+  const $ = id => document.getElementById(id);
+  async function api(path, body) {
+    const response = await fetch(path, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  }
+  function renderDocuments(documents) {
+    const list = $('documents'); list.replaceChildren();
+    for (const uploadedDocument of documents) {
+      const item = document.createElement('p');
+      item.textContent = `${uploadedDocument.name} · ${uploadedDocument.passages} passages`;
+      list.append(item);
+    }
+  }
+  $('upload').onclick = async () => {
+    const file = $('pdf').files[0];
+    if (!file) { $('status').textContent = 'Choose a PDF first.'; return; }
+    $('upload').disabled = true; $('status').textContent = 'Reading PDF…';
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = reject; reader.readAsDataURL(file);
+      });
+      selectedDocument = await api('/api/upload', {name: file.name, data});
+      $('status').textContent = `Ready: ${selectedDocument.passages} passages from ${file.name}.`;
+      $('ask').disabled = false;
+      $('makeQuiz').disabled = false;
+      renderDocuments((await fetch('/api/documents').then(r => r.json())).documents);
+    } catch (error) { $('status').textContent = error.message; }
+    finally { $('upload').disabled = false; }
+  };
+  $('ask').onclick = async () => {
+    if (!selectedDocument) return;
+    $('ask').disabled = true; $('answer').textContent = 'Finding an answer…';
+    try {
+      const result = await api('/api/ask', {document_id: selectedDocument.id, question: $('question').value});
+      $('answer').textContent = result.answer;
+      const sources = $('sources'); sources.replaceChildren();
+      for (const source of result.sources) {
+        const item = document.createElement('div'); item.className = 'source';
+        const title = document.createElement('strong'); title.textContent = `${source.id} · page ${source.page}`;
+        const text = document.createElement('p'); text.textContent = source.text;
+        item.append(title, text); sources.append(item);
+      }
+    } catch (error) { $('answer').textContent = error.message; }
+    finally { $('ask').disabled = false; }
+  };
+  function showScores() {
+    const scores = JSON.parse(localStorage.getItem('noteworthy-topic-scores') || '{}');
+    const container = $('topicScores'); container.replaceChildren();
+    const entries = Object.entries(scores);
+    if (!entries.length) { container.textContent = 'Complete a quiz to see topic scores.'; return; }
+    for (const [topic, values] of entries) {
+      const percent = Math.round(100 * values.correct / values.total);
+      const row = document.createElement('div'); row.className = 'scorebar';
+      const title = document.createElement('div'); title.textContent = `${topic}: ${percent}% (${values.correct}/${values.total})`;
+      const bar = document.createElement('span'); bar.style.width = `${percent}%`;
+      row.append(title, bar); container.append(row);
+    }
+  }
+  $('makeQuiz').onclick = async () => {
+    $('makeQuiz').disabled = true; $('quizResult').textContent = 'Generating questions…';
+    try {
+      const result = await api('/api/quiz', {document_id: selectedDocument.id});
+      currentQuiz = result.questions;
+      const container = $('quiz'); container.replaceChildren();
+      currentQuiz.forEach((item, index) => {
+        const block = document.createElement('div'); block.className = 'quiz-question';
+        const title = document.createElement('strong'); title.textContent = `${index + 1}. ${item.question}`;
+        block.append(title);
+        item.options.forEach((option, choice) => {
+          const label = document.createElement('label');
+          const radio = document.createElement('input'); radio.type = 'radio'; radio.name = `q${index}`; radio.value = choice;
+          label.append(radio, ` ${option}`); block.append(label);
+        });
+        container.append(block);
+      });
+      const submit = document.createElement('button'); submit.textContent = 'Submit quiz';
+      submit.onclick = () => {
+        let correct = 0;
+        const scores = JSON.parse(localStorage.getItem('noteworthy-topic-scores') || '{}');
+        currentQuiz.forEach((item, index) => {
+          const chosen = document.querySelector(`input[name=q${index}]:checked`);
+          const right = chosen && Number(chosen.value) === item.answer_index;
+          if (right) correct++;
+          scores[item.topic] ||= {correct: 0, total: 0};
+          scores[item.topic].total++; if (right) scores[item.topic].correct++;
+          const note = document.createElement('p');
+          note.textContent = `${right ? 'Correct' : `Answer: ${item.options[item.answer_index]}`} · ${item.source_id}, page ${item.page}`;
+          $('quiz').children[index].append(note);
+        });
+        localStorage.setItem('noteworthy-topic-scores', JSON.stringify(scores));
+        $('quizResult').textContent = `Score: ${correct} / ${currentQuiz.length}`;
+        submit.disabled = true; showScores();
+      };
+      container.append(submit); $('quizResult').textContent = '';
+    } catch (error) { $('quizResult').textContent = error.message; }
+    finally { $('makeQuiz').disabled = false; }
+  };
+  showScores();
+</script>
+</html>
