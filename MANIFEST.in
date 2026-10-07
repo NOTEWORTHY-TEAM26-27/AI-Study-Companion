@@ -1,0 +1,2 @@
+include Makefile requirements-dev.txt .env.example
+recursive-include tests *.py
