@@ -92,6 +92,59 @@ container's temporary filesystem will not survive its replacement. An S3-backed
 implementation can be added in `storage.py` when AWS is configured. See
 [AWS container storage guidance](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_data_volumes.html).
 
+## Docker and Compose
+
+Requires a running Docker engine and Docker Compose v2 or newer. From the
+repository root:
+
+```bash
+docker compose up --build -d --wait
+docker compose logs -f app
+```
+
+Open <http://127.0.0.1:8000>. The app runs as a non-root user, binds to all
+interfaces inside the container, and is published only on your computer's
+loopback interface. The image checks `/health` without calling Ollama. PDF
+extraction and quizzes work without a model service.
+
+Compose mounts the named `documents` volume at `/data/documents`. Uploaded PDFs
+and extracted passages survive container recreation and `docker compose down`.
+This volume is separate from the local app's `data/documents` directory. Compose
+does not copy existing local uploads into it.
+
+```bash
+docker compose up -d --force-recreate --wait   # replace the app, keeping documents
+docker compose down                          # stop/remove containers, keeping documents
+```
+
+`docker compose down --volumes` deletes the stored uploads. Use that option only
+when you intend to reset the data. A local Docker volume stays on its Docker
+host; an AWS deployment still needs its own persistent storage configuration.
+
+Compose automatically reads `.env` for variable substitution. `COMPOSE_PORT`
+changes the host port (for example, `COMPOSE_PORT=8080 docker compose up -d`).
+The container's internal port remains 8000. `COMPOSE_OLLAMA_URL` controls the
+container's model endpoint separately from the local app's `OLLAMA_URL`:
+
+```bash
+COMPOSE_OLLAMA_URL=http://host.docker.internal:11434/api/generate docker compose up -d
+```
+
+The default reaches Ollama running on the host. Ollama must accept connections
+from the Docker network; a service bound only to host loopback may need its
+listen address configured. `OLLAMA_MODEL` selects the model as before. No Ollama
+container or model download is added by this setup. The host alias is configured
+for Docker Desktop and Linux Docker Engine using `host-gateway`.
+
+To build only the runtime image (also usable by SCRUM-59's CI work):
+
+```bash
+docker build -t noteworthy-app .
+```
+
+The build context includes only application source and required package metadata;
+Git history, `.env`, uploads, tests, and development tooling are excluded.
+
 ## Checks and packaging
 
 After setup, these commands work locally and can be used by CI:
@@ -163,5 +216,6 @@ The follow-up order under SCRUM-11 is:
 
 The existing `.github/workflows/ci.yml` runs on pushes and pull requests and
 currently checks only that the README exists. SCRUM-59 will wire the application
-checks and Docker build into that workflow. Docker, AWS, Bedrock, and staging
-deployment are still outstanding; this scaffold does not complete SCRUM-11.
+checks and Docker build into that workflow. Docker and Compose are now available;
+application CI wiring, AWS, Bedrock, and staging deployment are still outstanding.
+This work does not complete SCRUM-11.
