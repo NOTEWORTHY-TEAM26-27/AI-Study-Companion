@@ -1,2 +1,3 @@
 include Makefile requirements-dev.txt .env.example
+include Dockerfile compose.yaml .dockerignore
 recursive-include tests *.py

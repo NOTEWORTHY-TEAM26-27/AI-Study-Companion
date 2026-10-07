@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:${COMPOSE_PORT:-8000}:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DOCUMENTS_DIR: /data/documents
+      OLLAMA_URL: ${COMPOSE_OLLAMA_URL:-http://host.docker.internal:11434/api/generate}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:3b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - documents:/data/documents
+
+volumes:
+  documents:

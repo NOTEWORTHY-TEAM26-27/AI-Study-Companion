@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!pyproject.toml
+!requirements.txt
+!README.md
+!noteworthy_app/
+!noteworthy_app/**
+**/__pycache__/
+**/*.py[cod]
