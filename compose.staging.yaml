@@ -1,4 +1,4 @@
-# Staging on the Lightsail server. Used together with compose.yaml:
+# Staging on the DigitalOcean Droplet. Used together with compose.yaml:
 #   docker compose -f compose.yaml -f compose.staging.yaml up -d --build
 # scripts/deploy_staging.sh runs this for you. Caddy serves HTTPS and forwards to the app.
 services:

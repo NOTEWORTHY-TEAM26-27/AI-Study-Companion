@@ -1,22 +1,26 @@
 # Staging server setup (SCRUM-61)
 
-One Amazon Lightsail server runs the app behind Caddy, which provides HTTPS.
+One DigitalOcean Droplet runs the app behind Caddy, which provides HTTPS.
 The URL uses sslip.io because the course cannot buy a domain name.
 
 ## One-time setup
 
-1. In Lightsail (region us-east-1), create an instance: Linux/Unix, Ubuntu 24.04 LTS, the 2 GB plan.
-2. Networking tab: create a static IP and attach it to the instance.
-3. Networking tab, IPv4 firewall: allow SSH (22), HTTP (80), and HTTPS (443). Add 443 if it is missing.
-4. Connect with the browser SSH button, then install Docker:
+1. In the DigitalOcean team, create a Droplet: Ubuntu 24.04 LTS, Basic, Regular, 2 GB / 1 vCPU,
+   a US region such as NYC3. Add your SSH key (or use a password and the browser console).
+2. Networking, Reserved IPs: assign a Reserved IP to the Droplet so the URL survives a rebuild.
+3. Networking, Firewalls: create a Cloud Firewall that allows inbound SSH (22), HTTP (80), and HTTPS (443),
+   and apply it to the Droplet.
+4. Open the Droplet's Console (or `ssh root@<reserved-ip>`), then create a deploy user and install Docker:
 
    ```bash
-   curl -fsSL https://get.docker.com | sudo sh
-   sudo usermod -aG docker ubuntu
-   exit
+   adduser --disabled-password --gecos "" deploy
+   usermod -aG sudo deploy
+   curl -fsSL https://get.docker.com | sh
+   usermod -aG docker deploy
+   su - deploy
    ```
 
-   Reconnect so the docker group applies.
+   Run the rest as the `deploy` user.
 5. Let the server read the private repository with a read-only deploy key:
 
    ```bash
@@ -38,7 +42,7 @@ The URL uses sslip.io because the course cannot buy a domain name.
    nano .env
    ```
 
-   Set `STAGING_HOST` to the static IP with dashes plus `.sslip.io`, for example `3-85-12-34.sslip.io`.
+   Set `STAGING_HOST` to the Reserved IP with dashes plus `.sslip.io`, for example `203-0-113-10.sslip.io`.
 
 ## Deploy
 
@@ -62,5 +66,6 @@ Uploaded documents live in the `documents` Docker volume and survive redeploys.
 
 ## Not yet on staging
 
-- Model answers: the app calls Ollama until SCRUM-60 switches it to Bedrock. Upload and quiz work without it.
+- Model answers: the app calls Ollama until SCRUM-60 switches it to DigitalOcean serverless inference.
+  Upload and quiz work without it.
 - Deploy on merge is SCRUM-79 (Sprint 3); for now run the script by hand after merging to `main`.

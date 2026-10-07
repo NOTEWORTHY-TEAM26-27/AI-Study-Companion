@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the latest main branch to staging. Run on the Lightsail server from the repo folder.
+# Deploy the latest main branch to staging. Run on the staging Droplet from the repo folder.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
