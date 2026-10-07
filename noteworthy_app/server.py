@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 import threading
@@ -12,9 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .core import Passage, build_prompt, extract_passages, retrieve
+from .core import build_prompt, extract_passages, retrieve
 from .models import generate_answer
 from .quiz import generate_quiz
+from .storage import load_documents, save_document
 
 STATIC = Path(__file__).parent / "static" / "index.html"
 MAX_PDF_BYTES = 12 * 1024 * 1024
@@ -22,10 +22,13 @@ MAX_REQUEST_BYTES = MAX_PDF_BYTES * 2
 
 
 class StudyServer(ThreadingHTTPServer):
-    """Keep uploaded documents local to this process/server instance."""
+    """Serve documents from one storage directory with an in-memory lookup."""
 
-    def __init__(self, address: tuple[str, int], answer_generator: Callable[[str], str]):
-        self.documents: dict[str, tuple[str, list[Passage]]] = {}
+    def __init__(
+        self, address: tuple[str, int], answer_generator: Callable[[str], str], data_dir: Path
+    ):
+        self.data_dir = data_dir
+        self.documents = load_documents(data_dir)
         self.document_lock = threading.Lock()
         self.answer_generator = answer_generator
         super().__init__(address, Handler)
@@ -95,8 +98,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(413, {"error": "PDF must be at most 12 MB."})
                     return
                 passages = extract_passages(pdf)
-                document_id = hashlib.sha256(pdf).hexdigest()[:16]
                 with self.server.document_lock:
+                    document_id = save_document(self.server.data_dir, name, pdf, passages)
                     self.server.documents[document_id] = (name, passages)
                 self._json(200, {"id": document_id, "name": name, "passages": len(passages)})
                 return
@@ -130,6 +133,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(exc)})
         except RuntimeError as exc:
             self._json(503, {"error": str(exc)})
+        except OSError:
+            self.log_error("Could not save document to storage")
+            self._json(500, {"error": "Could not save document. Please try again."})
 
 
 def create_server(
@@ -137,8 +143,12 @@ def create_server(
     port: int = 8000,
     *,
     answer_generator: Callable[[str], str] = generate_answer,
+    data_dir: str | Path | None = None,
 ) -> StudyServer:
-    return StudyServer((host, port), answer_generator)
+    directory = Path(
+        data_dir if data_dir is not None else os.environ.get("DOCUMENTS_DIR", "data/documents")
+    )
+    return StudyServer((host, port), answer_generator, directory)
 
 
 def main() -> None:

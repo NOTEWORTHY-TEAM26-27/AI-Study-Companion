@@ -69,6 +69,29 @@ The `.env` file is loaded by the shell commands above, not automatically by the
 application. `HOST` and `PORT` control the bind address. The installed command
 `noteworthy-app` and `python -m noteworthy_app.server` are equivalent entry points.
 
+## Uploaded document storage
+
+`DOCUMENTS_DIR` selects the storage directory, defaulting to `data/documents`
+relative to the directory where you start the app. Each successful upload saves
+the original `<document-id>.pdf` and a `<document-id>.json` file containing its
+display name and extracted passages. The ID is derived from the PDF content;
+the uploaded filename is never used as a disk path. Uploading the same PDF again
+keeps the same ID and updates its display name.
+
+On startup the app restores saved passages into memory, so the document list,
+answer, and quiz APIs work after restarting without another upload or text
+extraction. Invalid PDFs are rejected before saving. Storage failures return
+HTTP 500 without publishing a new document; unreadable or incomplete stored
+records are skipped on startup with a warning. Writes replace each file
+atomically, with metadata saved last so an interrupted first upload is not
+listed as complete. The default `data/` directory is excluded from Git.
+
+This is file storage for one application process. For Docker or AWS staging,
+set `DOCUMENTS_DIR` to a writable persistent volume; files in a disposable
+container's temporary filesystem will not survive its replacement. An S3-backed
+implementation can be added in `storage.py` when AWS is configured. See
+[AWS container storage guidance](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_data_volumes.html).
+
 ## Checks and packaging
 
 After setup, these commands work locally and can be used by CI:
@@ -94,7 +117,8 @@ developer tools are pinned in `requirements-dev.txt`.
 | `noteworthy_app/core.py` | Typed PDF extraction, passage retrieval, and cited answer prompts |
 | `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions |
 | `noteworthy_app/models.py` | Ollama adapter exposing `generate_answer(prompt) -> str` |
-| `noteworthy_app/server.py` | HTTP routes, validation, and in-memory document storage |
+| `noteworthy_app/server.py` | HTTP routes, validation, and in-memory document lookup |
+| `noteworthy_app/storage.py` | Save original PDFs and passages; restore documents on startup |
 | `noteworthy_app/static/index.html` | Existing upload, answer, quiz, and browser-local score interface |
 | `tests/` | Offline extraction, quiz, model adapter, and HTTP behavior checks |
 
@@ -105,19 +129,22 @@ the model adapter replaceable for the Bedrock work in SCRUM-60.
 |---|---|
 | `GET /` | Serve the study interface |
 | `GET /health` | Return `{"status":"ok"}` without calling external services |
-| `GET /api/documents` | List documents uploaded to this server instance |
+| `GET /api/documents` | List current and restored documents from the configured storage directory |
 | `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID and passage count |
 | `POST /api/ask` | Accept `document_id` and `question`; return answer and source passages |
 | `POST /api/quiz` | Accept `document_id`; return five questions with options and source IDs |
 
 The PDF limit is 12 MiB. Invalid JSON and fields return 400, missing routes or
-documents return 404, oversized uploads return 413, and model failures return 503.
+documents return 404, oversized uploads return 413, storage failures return 500,
+and model failures return 503.
 
 ## Prototype limits and Sprint 2 handoff
 
 This is a local development baseline. Documents are shared within one server
-instance, stored only in memory, and lost on restart; scores live in browser
-local storage. There is no login, per-student isolation, database, OCR, or
+instance and persist in its configured storage directory; scores live in browser
+local storage. The frontend's document library and processing-status work remains
+under SCRUM-65; the existing page lists documents after an upload. There is no
+login, per-student isolation, database, OCR, or
 OneDrive/Canvas import in this scaffold. It retains lexical passage retrieval
 and the existing cloze quiz rather than claiming all team prototypes are merged.
 

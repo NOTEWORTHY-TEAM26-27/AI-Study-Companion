@@ -1,8 +1,10 @@
 import base64
 import http.client
 import json
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 
 from noteworthy_app.server import MAX_PDF_BYTES, create_server
 from tests.fixtures import study_pdf
@@ -11,12 +13,15 @@ from tests.fixtures import study_pdf
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.prompts = []
+        self.storage = tempfile.TemporaryDirectory()
+        self.addCleanup(self.storage.cleanup)
+        self.data_dir = Path(self.storage.name) / "documents"
 
         def answer(prompt):
             self.prompts.append(prompt)
             return "Photosynthesis uses sunlight [p1-1]."
 
-        self.server = create_server("127.0.0.1", 0, answer_generator=answer)
+        self.server = create_server("127.0.0.1", 0, answer_generator=answer, data_dir=self.data_dir)
         self.thread = threading.Thread(
             target=lambda: self.server.serve_forever(poll_interval=0.01), daemon=True
         )
@@ -145,11 +150,84 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertIn("unavailable", result["error"])
 
-    def test_documents_are_scoped_to_server_instance(self):
+    def test_documents_are_scoped_to_storage_directory(self):
         self.upload()
-        other = create_server("127.0.0.1", 0)
+        other = create_server("127.0.0.1", 0, data_dir=Path(self.storage.name) / "other")
         self.addCleanup(other.server_close)
         self.assertEqual(other.documents, {})
+
+    def test_upload_saves_original_pdf_and_extracted_passages(self):
+        document_id = self.upload()
+        self.assertEqual((self.data_dir / f"{document_id}.pdf").read_bytes(), study_pdf())
+        metadata = json.loads((self.data_dir / f"{document_id}.json").read_text())
+        self.assertEqual(metadata["name"], "biology.pdf")
+        self.assertIn("Photosynthesis", metadata["passages"][0]["text"])
+        self.assertEqual(metadata["passages"][0]["page"], 1)
+
+    def test_documents_can_be_listed_queried_and_quizzed_after_restart(self):
+        document_id = self.upload()
+        answer_generator = self.server.answer_generator
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.server = create_server(
+            "127.0.0.1", 0, answer_generator=answer_generator, data_dir=self.data_dir
+        )
+        self.thread = threading.Thread(
+            target=lambda: self.server.serve_forever(poll_interval=0.01), daemon=True
+        )
+        self.thread.start()
+        status, content = self.request("/api/documents")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(content)["documents"][0]["id"], document_id)
+        status, result = self.post(
+            "/api/ask", {"document_id": document_id, "question": "Photosynthesis sunlight"}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(result["sources"])
+        status, result = self.post("/api/quiz", {"document_id": document_id})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(result["questions"]), 5)
+
+    def test_storage_failure_returns_error_and_does_not_publish_document(self):
+        self.data_dir.rmdir()
+        self.data_dir.write_text("a file blocks the document directory")
+        status, result = self.post(
+            "/api/upload", {"name": "biology.pdf", "data": base64.b64encode(study_pdf()).decode()}
+        )
+        self.assertEqual(status, 500)
+        self.assertIn("save", result["error"])
+        self.assertEqual(self.server.documents, {})
+
+    def test_reupload_has_same_id_and_no_duplicate_document(self):
+        document_id = self.upload()
+        self.assertEqual(self.upload(), document_id)
+        self.assertEqual(len(self.server.documents), 1)
+        self.assertEqual(len(list(self.data_dir.glob("*.pdf"))), 1)
+        self.assertEqual(len(list(self.data_dir.glob("*.json"))), 1)
+
+    def test_untrusted_filename_does_not_control_storage_path(self):
+        status, result = self.post(
+            "/api/upload",
+            {"name": "../outside.pdf", "data": base64.b64encode(study_pdf()).decode()},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue((self.data_dir / f"{result['id']}.pdf").is_file())
+        self.assertFalse((self.data_dir.parent / "outside.pdf").exists())
+
+    def test_empty_and_invalid_pdfs_do_not_create_records(self):
+        for content in [b"", b"not a PDF"]:
+            with self.subTest(content=content):
+                if content:
+                    with self.assertLogs("pypdf", level="WARNING"):
+                        status, _ = self.post(
+                            "/api/upload",
+                            {"name": "bad.pdf", "data": base64.b64encode(content).decode()},
+                        )
+                else:
+                    status, _ = self.post("/api/upload", {"name": "bad.pdf", "data": ""})
+                self.assertEqual(status, 400)
+        self.assertEqual(list(self.data_dir.iterdir()), [])
 
 
 if __name__ == "__main__":
