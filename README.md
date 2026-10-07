@@ -214,8 +214,17 @@ The follow-up order under SCRUM-11 is:
 
 ## Continuous integration
 
-The existing `.github/workflows/ci.yml` runs on pushes and pull requests and
-currently checks only that the README exists. SCRUM-59 will wire the application
-checks and Docker build into that workflow. Docker and Compose are now available;
-application CI wiring, AWS, Bedrock, and staging deployment are still outstanding.
-This work does not complete SCRUM-11.
+`.github/workflows/ci.yml` runs on every push and pull request. Its
+`repository-check` job installs the pinned dependencies, checks Ruff lint and
+formatting, runs the offline unittest suite, and builds the Docker image. Python
+3.14.7 matches the runtime image; Node 24 is installed so the browser-logic test
+runs in CI rather than being skipped. Pip downloads are cached using both
+requirements files as the cache key inputs.
+
+The workflow needs no AWS credentials or running Ollama service. It builds the
+image locally on the runner without publishing it or deploying anything. To
+require CI before merging, select `repository-check` as a required status check
+in the ruleset for `main`.
+
+Docker, Compose, and application CI are now available. AWS, Bedrock, and staging
+deployment remain outstanding; SCRUM-11 is still In Progress.

@@ -10,8 +10,28 @@ permissions:
 jobs:
   repository-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Verify project metadata
-        run: test -s README.md
+        uses: actions/checkout@v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14.7"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Set up Node for browser logic tests
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Check lint and formatting
+        run: make lint PYTHON=python
+      - name: Run offline tests
+        run: make test PYTHON=python
+      - name: Build Docker image
+        run: docker build --tag noteworthy-app:ci .
