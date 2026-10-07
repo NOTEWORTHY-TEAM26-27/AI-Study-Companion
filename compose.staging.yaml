@@ -1,0 +1,26 @@
+# Staging on the Lightsail server. Used together with compose.yaml:
+#   docker compose -f compose.yaml -f compose.staging.yaml up -d --build
+# scripts/deploy_staging.sh runs this for you. Caddy serves HTTPS and forwards to the app.
+services:
+  app:
+    env_file: .env
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      STAGING_HOST: ${STAGING_HOST:?Set STAGING_HOST in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
