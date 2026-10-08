@@ -11,7 +11,7 @@ AI Study Companion is a Senior Design project focused on developing an AI-powere
 | Fallou Samb | Product Owner / QA |
 | David Huynh | Backend / Scrum Master |
 | John Cobio | Backend |
-| Sunil Thapa Magaris | AI/ML |
+| Sunil Thapa Magar | AI/ML |
 | James Nguyen | Frontend |
 
 ## Project Goals
@@ -63,7 +63,7 @@ a five-question practice quiz. Answer generation additionally requires Ollama
 running at `OLLAMA_URL` with the model named by `OLLAMA_MODEL` available. The
 defaults match the existing prototype. An unavailable model returns HTTP 503;
 startup, health checks, extraction, quizzes, and automated tests do not require
-Ollama, AWS credentials, or student files.
+Ollama, cloud credentials, or student files.
 
 The `.env` file is loaded by the shell commands above, not automatically by the
 application. `HOST` and `PORT` control the bind address. The installed command
@@ -86,11 +86,11 @@ records are skipped on startup with a warning. Writes replace each file
 atomically, with metadata saved last so an interrupted first upload is not
 listed as complete. The default `data/` directory is excluded from Git.
 
-This is file storage for one application process. For Docker or AWS staging,
-set `DOCUMENTS_DIR` to a writable persistent volume; files in a disposable
-container's temporary filesystem will not survive its replacement. An S3-backed
-implementation can be added in `storage.py` when AWS is configured. See
-[AWS container storage guidance](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_data_volumes.html).
+This is file storage for one application process. In a container,
+`DOCUMENTS_DIR` must point to a writable persistent volume; files in a
+disposable container's temporary filesystem will not survive its replacement.
+Compose sets it to `/data/documents`, backed by the `documents` volume, so on
+the staging Droplet uploads stay in that volume (see `deploy/STAGING.md`).
 
 ## Docker and Compose
 
@@ -118,8 +118,9 @@ docker compose down                          # stop/remove containers, keeping d
 ```
 
 `docker compose down --volumes` deletes the stored uploads. Use that option only
-when you intend to reset the data. A local Docker volume stays on its Docker
-host; an AWS deployment still needs its own persistent storage configuration.
+when you intend to reset the data. A Docker volume stays on its Docker host, so
+the staging Droplet has its own `documents` volume, separate from the one on
+your computer.
 
 Compose automatically reads `.env` for variable substitution. `COMPOSE_PORT`
 changes the host port (for example, `COMPOSE_PORT=8080 docker compose up -d`).
@@ -158,10 +159,10 @@ make build PYTHON=python          # wheel and source distribution in dist/
 Use `make format PYTHON=python` to apply formatting and import fixes. An optional
 browser-logic regression test runs with Node.js when installed, and is explicitly
 skipped otherwise; Node is not required to run the application. Tests use
-synthetic PDFs and a local test model server; they never call Ollama or AWS.
-The wheel includes the HTML interface, so an installed app can run outside the
-source checkout. Runtime dependencies are pinned in `requirements.txt`, and
-developer tools are pinned in `requirements-dev.txt`.
+synthetic PDFs and a local test model server; they never call Ollama or a hosted
+model. The wheel includes the HTML interface, so an installed app can run
+outside the source checkout. Runtime dependencies are pinned in
+`requirements.txt`, and developer tools are pinned in `requirements-dev.txt`.
 
 ## Application structure
 
@@ -175,8 +176,10 @@ developer tools are pinned in `requirements-dev.txt`.
 | `noteworthy_app/static/index.html` | Existing upload, answer, quiz, and browser-local score interface |
 | `tests/` | Offline extraction, quiz, model adapter, and HTTP behavior checks |
 
-The server accepts an answer generator through `create_server(...)`; this keeps
-the model adapter replaceable for the Bedrock work in SCRUM-60.
+The server accepts an answer generator through `create_server(...)`, so the
+model adapter can be swapped. Under SCRUM-60, `noteworthy_app/models.py` adds
+DigitalOcean serverless inference for staging, chosen by an environment
+variable, and keeps Ollama for local development.
 
 | Route | Behavior |
 |---|---|
@@ -204,13 +207,15 @@ and the existing cloze quiz rather than claiming all team prototypes are merged.
 The follow-up order under SCRUM-11 is:
 
 1. Complete remaining prototype integration under SCRUM-56 (John).
-2. Prepare AWS access under SCRUM-57 (David), alongside app integration.
+2. Set up the DigitalOcean account under SCRUM-57 (David), alongside app
+   integration.
 3. Containerize the app under SCRUM-58 (David). Set `HOST=0.0.0.0` in a container;
    the local default binds only to loopback.
 4. Run the check commands and Docker build under SCRUM-59 (David).
-5. Replace model access with Bedrock under SCRUM-60 (Sunil), in parallel.
-6. Deploy staging under SCRUM-61 (David), then record the actual deployment
-   commands and URL under SCRUM-62 (John).
+5. Add DigitalOcean serverless inference for staging under SCRUM-60 (Sunil), in
+   parallel; Ollama stays for local development.
+6. Deploy staging under SCRUM-61 (David, steps in `deploy/STAGING.md`), then
+   record the actual deployment commands and URL under SCRUM-62 (John).
 
 ## Continuous integration
 
@@ -221,10 +226,11 @@ formatting, runs the offline unittest suite, and builds the Docker image. Python
 runs in CI rather than being skipped. Pip downloads are cached using both
 requirements files as the cache key inputs.
 
-The workflow needs no AWS credentials or running Ollama service. It builds the
+The workflow needs no cloud credentials or running Ollama service. It builds the
 image locally on the runner without publishing it or deploying anything. To
 require CI before merging, select `repository-check` as a required status check
 in the ruleset for `main`.
 
-Docker, Compose, and application CI are now available. AWS, Bedrock, and staging
-deployment remain outstanding; SCRUM-11 is still In Progress.
+Docker, Compose, and application CI are now available. The DigitalOcean account,
+hosted model, and staging deployment remain outstanding; SCRUM-11 is still In
+Progress.
