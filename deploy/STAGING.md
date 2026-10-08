@@ -7,10 +7,12 @@ The URL uses sslip.io because the course cannot buy a domain name.
 
 1. In the DigitalOcean team, create a Droplet: Ubuntu 24.04 LTS, Basic, Regular, 2 GB / 1 vCPU,
    a US region such as NYC3. Add your SSH key (or use a password and the browser console).
-2. Networking, Reserved IPs: assign a Reserved IP to the Droplet so the URL survives a rebuild.
+2. Networking, Reserved IPs: assign a Reserved IP to the Droplet so the URL stays the same if the Droplet
+   is ever replaced. It is free while assigned and $5 per month if left unassigned.
 3. Networking, Firewalls: create a Cloud Firewall that allows inbound SSH (22), HTTP (80), and HTTPS (443),
    and apply it to the Droplet.
-4. Open the Droplet's Console (or `ssh root@<reserved-ip>`), then create a deploy user and install Docker:
+4. Open the Droplet's Web Console (or `ssh root@<reserved-ip>`; the login user is root), then create a
+   deploy user and install Docker:
 
    ```bash
    adduser --disabled-password --gecos "" deploy
