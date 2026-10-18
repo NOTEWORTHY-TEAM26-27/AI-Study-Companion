@@ -231,6 +231,8 @@ image locally on the runner without publishing it or deploying anything. To
 require CI before merging, select `repository-check` as a required status check
 in the ruleset for `main`.
 
-Docker, Compose, and application CI are now available. The DigitalOcean account,
-hosted model, and staging deployment remain outstanding; SCRUM-11 is still In
-Progress.
+`.github/workflows/deploy-staging.yml` deploys staging after CI passes on a push
+to `main` (SCRUM-79). Setup and how to turn it off are in `deploy/STAGING.md`.
+
+Docker, Compose, CI, the DigitalOcean account, and staging are done. The hosted
+model (SCRUM-60) remains; SCRUM-11 is still In Progress.
