@@ -1,0 +1,361 @@
+{
+    "documents": [
+        "Week1_B",
+        "Week1_A",
+        "Week3_A"
+    ],
+    "relationships": [
+        {
+            "source": "Scrum",
+            "relationship": "has role",
+            "target": "Product Owner",
+            "page": 7,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Scrum",
+            "relationship": "has role",
+            "target": "Scrum Master",
+            "page": 7,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Scrum",
+            "relationship": "has role",
+            "target": "The Team",
+            "page": 7,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Product Owner",
+            "relationship": "owns",
+            "target": "Product Backlog",
+            "page": 8,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Scrum Master",
+            "relationship": "owns",
+            "target": "Scrum process",
+            "page": 9,
+            "document": "Week1_B"
+        },
+        {
+            "source": "The Team",
+            "relationship": "owns",
+            "target": "Sprint Backlog",
+            "page": 10,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Product Owner",
+            "relationship": "owns",
+            "target": "Product Vision",
+            "page": 8,
+            "document": "Week1_B"
+        },
+        {
+            "source": "The Team",
+            "relationship": "owns",
+            "target": "Increment",
+            "page": 5,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Product Owner",
+            "relationship": "maintains",
+            "target": "Product Backlog",
+            "page": 18,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Scrum Master",
+            "relationship": "coaches",
+            "target": "The Team",
+            "page": 9,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Product Owner",
+            "relationship": "decides",
+            "target": "Product Backlog",
+            "page": 8,
+            "document": "Week1_B"
+        },
+        {
+            "source": "Scrum Master",
+            "relationship": "removes",
+            "target": "Impediments",
+            "page": 9,
+            "document": "Week1_B"
+        },
+        {
+            "source": "The Team",
+            "relationship": "decides",
+            "target": "Sprint Backlog",
+            "page": 10,
+            "document": "Week1_B"
+        },
+        {
+            "source": "The Team",
+            "relationship": "inspects",
+            "target": "Increment",
+            "page": 5,
+            "document": "Week1_B"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "is a type of",
+            "target": "Senior Design Course",
+            "page": 1,
+            "document": "Week1_A"
+        },
+        {
+            "source": "Dr. Chenxi Wang",
+            "relationship": "teaches",
+            "target": "CSE 4316",
+            "page": 1,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "requires",
+            "target": "Engineering Notebook",
+            "page": 7,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "uses",
+            "target": "Essential Scrum",
+            "page": 7,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Senior Design Lab Manager",
+            "page": 9,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Lab Coordinator",
+            "page": 9,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "requires",
+            "target": "Admitted into an Engineering Professional Program",
+            "page": 5,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "requires",
+            "target": "CSE4317",
+            "page": 10,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "contains",
+            "target": "Senior Design Project",
+            "page": 19,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "facilitates",
+            "target": "Team Meetings",
+            "page": 18,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "facilitates",
+            "target": "Sprint Presentations",
+            "page": 13,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "facilitates",
+            "target": "Individual Assignments",
+            "page": 12,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "facilitates",
+            "target": "Attendance Checks",
+            "page": 15,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Instructor",
+            "page": 8,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Peer Reviewer",
+            "page": 14,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Teammate",
+            "page": 14,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Vendor",
+            "page": 19,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "UTA CSE Senior Design Knowledge Base",
+            "page": 19,
+            "document": "Week1_A"
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Canvas",
+            "page": 16,
+            "document": "Week1_A"
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "is a document preparation system",
+            "target": "document preparation system",
+            "page": 3,
+            "document": "Week3_A"
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "can be used for almost any form of publishing",
+            "target": "publishing",
+            "page": 3,
+            "document": "Week3_A"
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "lets authors get on with writing documents",
+            "target": "writing documents",
+            "page": 5,
+            "document": "Week3_A"
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "input document as LaTeX code",
+            "target": "LaTeX code",
+            "page": 6,
+            "document": "Week3_A"
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "typesetting of complex mathematical formulas",
+            "target": "mathematical formulas",
+            "page": 7,
+            "document": "Week3_A"
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "multi-lingual typesetting",
+            "target": "lingual typesetting",
+            "page": 7,
+            "document": "Week3_A"
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "using PostScript or Metafont fonts",
+            "target": "font usage",
+            "page": 7,
+            "document": "Week3_A"
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "editor available on Overleaf",
+            "target": "Overleaf editor",
+            "page": 9,
+            "document": "Week3_A"
+        },
+        {
+            "source": "Project Charter",
+            "relationship": "authorizes a project and aligns the team",
+            "target": "project alignment",
+            "page": 12,
+            "document": "Week3_A"
+        },
+        {
+            "source": "Project Charter",
+            "relationship": "names who is responsible for the project",
+            "target": "project responsibility",
+            "page": 12,
+            "document": "Week3_A"
+        },
+        {
+            "source": "Scrum Master",
+            "relationship": "removes blockers and protects the team",
+            "target": "team protection",
+            "page": 18,
+            "document": "Week3_A"
+        },
+        {
+            "source": "Stakeholders",
+            "relationship": "provide input and point of contact",
+            "target": "point of contact",
+            "page": 18,
+            "document": "Week3_A"
+        },
+        {
+            "source": "Assumptions vs. Constraints",
+            "relationship": "both add risk to the project",
+            "target": "project risk",
+            "page": 20,
+            "document": "Week3_A"
+        },
+        {
+            "source": "Assumptions vs. Constraints",
+            "relationship": "assumptions are things you hope hold true",
+            "target": "project hopes",
+            "page": 20,
+            "document": "Week3_A"
+        },
+        {
+            "source": "Assumptions vs. Constraints",
+            "relationship": "constraints are limits forced on you",
+            "target": "project limits",
+            "page": 20,
+            "document": "Week3_A"
+        },
+        {
+            "source": "Documentation & Reporting",
+            "relationship": "includes three streams of documentation",
+            "target": "documentation streams",
+            "page": 22,
+            "document": "Week3_A"
+        }
+    ],
+    "shared_concepts": [
+        {
+            "concept": "Scrum Master",
+            "documents": [
+                "Week1_B",
+                "Week3_A"
+            ]
+        }
+    ]
+}

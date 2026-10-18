@@ -1,0 +1,100 @@
+{
+    "relationships": [
+        {
+            "source": "LaTeX",
+            "relationship": "is a document preparation system",
+            "target": "document preparation system",
+            "page": 3
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "can be used for almost any form of publishing",
+            "target": "publishing",
+            "page": 3
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "lets authors get on with writing documents",
+            "target": "writing documents",
+            "page": 5
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "input document as LaTeX code",
+            "target": "LaTeX code",
+            "page": 6
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "typesetting of complex mathematical formulas",
+            "target": "mathematical formulas",
+            "page": 7
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "multi-lingual typesetting",
+            "target": "lingual typesetting",
+            "page": 7
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "using PostScript or Metafont fonts",
+            "target": "font usage",
+            "page": 7
+        },
+        {
+            "source": "LaTeX",
+            "relationship": "editor available on Overleaf",
+            "target": "Overleaf editor",
+            "page": 9
+        },
+        {
+            "source": "Project Charter",
+            "relationship": "authorizes a project and aligns the team",
+            "target": "project alignment",
+            "page": 12
+        },
+        {
+            "source": "Project Charter",
+            "relationship": "names who is responsible for the project",
+            "target": "project responsibility",
+            "page": 12
+        },
+        {
+            "source": "Scrum Master",
+            "relationship": "removes blockers and protects the team",
+            "target": "team protection",
+            "page": 18
+        },
+        {
+            "source": "Stakeholders",
+            "relationship": "provide input and point of contact",
+            "target": "point of contact",
+            "page": 18
+        },
+        {
+            "source": "Assumptions vs. Constraints",
+            "relationship": "both add risk to the project",
+            "target": "project risk",
+            "page": 20
+        },
+        {
+            "source": "Assumptions vs. Constraints",
+            "relationship": "assumptions are things you hope hold true",
+            "target": "project hopes",
+            "page": 20
+        },
+        {
+            "source": "Assumptions vs. Constraints",
+            "relationship": "constraints are limits forced on you",
+            "target": "project limits",
+            "page": 20
+        },
+        {
+            "source": "Documentation & Reporting",
+            "relationship": "includes three streams of documentation",
+            "target": "documentation streams",
+            "page": 22
+        }
+    ]
+}

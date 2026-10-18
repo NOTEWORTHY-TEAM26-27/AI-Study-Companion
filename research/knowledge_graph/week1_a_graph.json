@@ -1,0 +1,118 @@
+{
+    "relationships": [
+        {
+            "source": "CSE 4316",
+            "relationship": "is a type of",
+            "target": "Senior Design Course",
+            "page": 1
+        },
+        {
+            "source": "Dr. Chenxi Wang",
+            "relationship": "teaches",
+            "target": "CSE 4316",
+            "page": 1
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "requires",
+            "target": "Engineering Notebook",
+            "page": 7
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "uses",
+            "target": "Essential Scrum",
+            "page": 7
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Senior Design Lab Manager",
+            "page": 9
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Lab Coordinator",
+            "page": 9
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "requires",
+            "target": "Admitted into an Engineering Professional Program",
+            "page": 5
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "requires",
+            "target": "CSE4317",
+            "page": 10
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "contains",
+            "target": "Senior Design Project",
+            "page": 19
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "facilitates",
+            "target": "Team Meetings",
+            "page": 18
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "facilitates",
+            "target": "Sprint Presentations",
+            "page": 13
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "facilitates",
+            "target": "Individual Assignments",
+            "page": 12
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "facilitates",
+            "target": "Attendance Checks",
+            "page": 15
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Instructor",
+            "page": 8
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Peer Reviewer",
+            "page": 14
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Teammate",
+            "page": 14
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Vendor",
+            "page": 19
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "UTA CSE Senior Design Knowledge Base",
+            "page": 19
+        },
+        {
+            "source": "CSE 4316",
+            "relationship": "has role",
+            "target": "Canvas",
+            "page": 16
+        }
+    ]
+}
