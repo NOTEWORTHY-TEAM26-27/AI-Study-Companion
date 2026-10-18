@@ -56,6 +56,24 @@ cd ~/noteworthy
 The script pulls `main`, rebuilds, restarts, and waits until `https://<STAGING_HOST>/health` answers.
 The first run takes a minute longer while Caddy gets the certificate.
 
+## Deploy on merge (SCRUM-79)
+
+`.github/workflows/deploy-staging.yml` deploys staging after CI passes on a push to `main`.
+It can also be run by hand from the Actions tab (Deploy to staging, Run workflow). It connects
+as `deploy` with its own SSH key, and the server only lets that key run the deploy script.
+
+One-time setup, on your own computer (needs SSH access to the server and the GitHub CLI):
+
+```bash
+./scripts/setup_deploy_key.sh
+```
+
+It makes a new SSH key, lets that key run only `scripts/deploy_staging.sh` on the server, and
+saves the private key as the `STAGING_SSH_KEY` repository secret. No copy stays on your computer.
+
+To stop automatic deploys, delete the `STAGING_SSH_KEY` secret or remove that line from
+`~/.ssh/authorized_keys` on the server. Running the script by hand still works.
+
 ## Useful commands
 
 ```bash
@@ -70,4 +88,3 @@ Uploaded documents live in the `documents` Docker volume and survive redeploys.
 
 - Model answers: the app calls Ollama until SCRUM-60 switches it to DigitalOcean serverless inference.
   Upload and quiz work without it.
-- Deploy on merge is SCRUM-79 (Sprint 3); for now run the script by hand after merging to `main`.

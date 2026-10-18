@@ -1,0 +1,42 @@
+name: Deploy to staging
+
+# Runs after CI passes on a push to main, or by hand from the Actions tab.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+env:
+  STAGING_SSH_HOST: 143.244.212.41
+  STAGING_HOST_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICkJi0fm4gQawAkiXTdgatBm9tHRys9v/KFbDs3OmOlo
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Deploy main to staging
+        env:
+          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "STAGING_SSH_KEY is not set. See deploy/STAGING.md." >&2
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/staging_key
+          chmod 600 ~/.ssh/staging_key
+          printf '%s %s\n' "$STAGING_SSH_HOST" "$STAGING_HOST_KEY" > ~/.ssh/known_hosts
+          # The server only lets this key run scripts/deploy_staging.sh.
+          ssh -i ~/.ssh/staging_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 -o ServerAliveInterval=30 "deploy@${STAGING_SSH_HOST}"
