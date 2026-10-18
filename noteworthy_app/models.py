@@ -1,4 +1,3 @@
-
 """Model adapter supporting local Ollama and hosted DigitalOcean inference."""
 
 import json
@@ -82,9 +81,7 @@ def _generate_digitalocean(prompt: str) -> str:
         data=json.dumps(
             {
                 "model": model,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "temperature": 0,
             }

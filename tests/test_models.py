@@ -1,4 +1,3 @@
-
 import gc
 import json
 import os
@@ -24,15 +23,9 @@ class ModelTests(unittest.TestCase):
         class Provider(BaseHTTPRequestHandler):
             def do_POST(self):
                 test.request_paths.append(self.path)
-                test.authorization_headers.append(
-                    self.headers.get("Authorization")
-                )
+                test.authorization_headers.append(self.headers.get("Authorization"))
                 test.requests.append(
-                    json.loads(
-                        self.rfile.read(
-                            int(self.headers["Content-Length"])
-                        )
-                    )
+                    json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 )
                 self.send_response(test.response_status)
 
@@ -48,21 +41,14 @@ class ModelTests(unittest.TestCase):
             def log_message(self, *args):
                 pass
 
-        self.server = ThreadingHTTPServer(
-            ("127.0.0.1", 0), Provider
-        )
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
         self.thread = threading.Thread(
-            target=lambda: self.server.serve_forever(
-                poll_interval=0.01
-            ),
+            target=lambda: self.server.serve_forever(poll_interval=0.01),
             daemon=True,
         )
         self.thread.start()
 
-        endpoint = (
-            f"http://127.0.0.1:"
-            f"{self.server.server_port}/api/generate"
-        )
+        endpoint = f"http://127.0.0.1:{self.server.server_port}/api/generate"
 
         self.environment = patch.dict(
             os.environ,
@@ -109,41 +95,29 @@ class ModelTests(unittest.TestCase):
             self.response_body = body
 
             with self.subTest(body=body):
-                with self.assertRaisesRegex(
-                    RuntimeError, "unavailable"
-                ):
+                with self.assertRaisesRegex(RuntimeError, "unavailable"):
                     generate_answer("question")
 
     def test_provider_http_failure_is_unavailable(self):
         self.response_status = 503
 
         with warnings.catch_warnings(record=True) as recorded:
-            warnings.simplefilter(
-                "always", ResourceWarning
-            )
+            warnings.simplefilter("always", ResourceWarning)
 
-            with self.assertRaisesRegex(
-                RuntimeError, "unavailable"
-            ):
+            with self.assertRaisesRegex(RuntimeError, "unavailable"):
                 generate_answer("question")
 
             gc.collect()
 
         self.assertEqual(
-            [
-                item
-                for item in recorded
-                if item.category is ResourceWarning
-            ],
+            [item for item in recorded if item.category is ResourceWarning],
             [],
         )
 
     def test_truncated_provider_response_is_unavailable(self):
         self.response_content_length = 100
 
-        with self.assertRaisesRegex(
-            RuntimeError, "unavailable"
-        ):
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
             generate_answer("question")
 
     # New Sprint 2 Task 8-5 tests
@@ -154,10 +128,7 @@ class ModelTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "OLLAMA_URL": (
-                        f"http://127.0.0.1:"
-                        f"{self.server.server_port}/api/generate"
-                    ),
+                    "OLLAMA_URL": (f"http://127.0.0.1:{self.server.server_port}/api/generate"),
                     "OLLAMA_MODEL": "test-model",
                 },
             ):
@@ -178,21 +149,10 @@ class ModelTests(unittest.TestCase):
 
     def test_digitalocean_request_and_answer(self):
         self.response_body = json.dumps(
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "content": " Hosted answer. "
-                        }
-                    }
-                ]
-            }
+            {"choices": [{"message": {"content": " Hosted answer. "}}]}
         ).encode()
 
-        endpoint = (
-            f"http://127.0.0.1:"
-            f"{self.server.server_port}/v1"
-        )
+        endpoint = f"http://127.0.0.1:{self.server.server_port}/v1"
 
         with patch.dict(
             os.environ,
@@ -219,9 +179,7 @@ class ModelTests(unittest.TestCase):
                 }
             ],
         )
-        self.assertFalse(
-            self.requests[0]["stream"]
-        )
+        self.assertFalse(self.requests[0]["stream"])
         self.assertEqual(
             self.request_paths[0],
             "/v1/chat/completions",
