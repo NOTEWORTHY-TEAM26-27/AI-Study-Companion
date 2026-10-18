@@ -1,0 +1,88 @@
+{
+    "relationships": [
+        {
+            "source": "Scrum",
+            "relationship": "has role",
+            "target": "Product Owner",
+            "page": 7
+        },
+        {
+            "source": "Scrum",
+            "relationship": "has role",
+            "target": "Scrum Master",
+            "page": 7
+        },
+        {
+            "source": "Scrum",
+            "relationship": "has role",
+            "target": "The Team",
+            "page": 7
+        },
+        {
+            "source": "Product Owner",
+            "relationship": "owns",
+            "target": "Product Backlog",
+            "page": 8
+        },
+        {
+            "source": "Scrum Master",
+            "relationship": "owns",
+            "target": "Scrum process",
+            "page": 9
+        },
+        {
+            "source": "The Team",
+            "relationship": "owns",
+            "target": "Sprint Backlog",
+            "page": 10
+        },
+        {
+            "source": "Product Owner",
+            "relationship": "owns",
+            "target": "Product Vision",
+            "page": 8
+        },
+        {
+            "source": "The Team",
+            "relationship": "owns",
+            "target": "Increment",
+            "page": 5
+        },
+        {
+            "source": "Product Owner",
+            "relationship": "maintains",
+            "target": "Product Backlog",
+            "page": 18
+        },
+        {
+            "source": "Scrum Master",
+            "relationship": "coaches",
+            "target": "The Team",
+            "page": 9
+        },
+        {
+            "source": "Product Owner",
+            "relationship": "decides",
+            "target": "Product Backlog",
+            "page": 8
+        },
+        {
+            "source": "Scrum Master",
+            "relationship": "removes",
+            "target": "Impediments",
+            "page": 9
+        },
+        {
+            "source": "The Team",
+            "relationship": "decides",
+            "target": "Sprint Backlog",
+            "page": 10
+        },
+        {
+            "source": "The Team",
+            "relationship": "inspects",
+            "target": "Increment",
+            "page": 5
+        }
+    ]
+}
