@@ -45,6 +45,8 @@ The URL uses sslip.io because the course cannot buy a domain name.
    ```
 
    Set `STAGING_HOST` to the Reserved IP with dashes plus `.sslip.io`, for example `203-0-113-10.sslip.io`.
+   Paste the DigitalOcean model access key after `DIGITALOCEAN_API_KEY=`. After changing `.env`, run the
+   deploy script so the app picks it up.
 
 ## Deploy
 
@@ -84,7 +86,8 @@ docker compose -f compose.yaml -f compose.staging.yaml down
 
 Uploaded documents live in the `documents` Docker volume and survive redeploys.
 
-## Not yet on staging
+## Model answers on staging
 
-- Model answers: the app calls Ollama until SCRUM-60 switches it to DigitalOcean serverless inference.
-  Upload and quiz work without it.
+Staging uses DigitalOcean serverless inference (`AI_PROVIDER=digitalocean`, model `llama-4-maverick` by
+default). Each answer uses prepaid credit. If `DIGITALOCEAN_API_KEY` is empty, answers return 503 and
+upload and quiz still work.

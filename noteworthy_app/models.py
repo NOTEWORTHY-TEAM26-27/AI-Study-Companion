@@ -17,7 +17,7 @@ def generate_answer(prompt: str) -> str:
     if provider == "digitalocean":
         return _generate_digitalocean(prompt)
 
-    raise ValueError(f"Unsupported AI_PROVIDER: {provider}")
+    raise RuntimeError(f"Unsupported AI_PROVIDER: {provider}")
 
 
 def _generate_ollama(prompt: str) -> str:
