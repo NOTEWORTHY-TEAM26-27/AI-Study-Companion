@@ -6,18 +6,25 @@ Sprint 1 RAG test, research/rag) through fastembed, which runs it without PyTorc
 
 from __future__ import annotations
 
-import math
 import os
 import threading
+import time
 from collections.abc import Callable, Sequence
+
+import numpy as np
 
 from .core import Passage, retrieve
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Best match scores measured on Week1_B.pdf: related questions 0.27 to 0.78, unrelated 0.02 to 0.22.
 MIN_SCORE = 0.25
+# Small batches without onnxruntime's memory arena keep embedding near 260 MB on the 2 GB
+# staging Droplet. fastembed's default batch of 256 held over 1 GB after a 200-passage PDF.
+BATCH_SIZE = 16
+# After a failed model load, fail fast for this long instead of retrying the download each time.
+RETRY_SECONDS = 60
 
-Embedder = Callable[[Sequence[str]], list[list[float]]]
+Embedder = Callable[[Sequence[str]], Sequence[Sequence[float]]]
 
 
 class KeywordSearch:
@@ -36,26 +43,28 @@ class EmbeddingSearch:
     """Rank passages by cosine similarity to the question, with keyword search as a fallback.
 
     Passage vectors are computed once per document (at upload, or on the first question after a
-    restart) and kept in memory. When no passage is similar enough, the keyword search decides,
-    so an unrelated question still gets "The PDF does not say." without a model call.
+    restart) and kept in memory. Passages scoring below min_score are not returned; when none
+    are left, the keyword search decides, so a question that shares no words with the PDF still
+    gets "The PDF does not say." without a model call.
     """
 
     def __init__(self, embed: Embedder, min_score: float = MIN_SCORE):
         self._embed = embed
         self._min_score = min_score
-        self._vectors: dict[str, tuple[tuple[str, ...], list[list[float]]]] = {}
+        self._vectors: dict[str, tuple[tuple[str, ...], np.ndarray]] = {}
         self._lock = threading.Lock()
 
-    def _encode(self, texts: Sequence[str]) -> list[list[float]]:
+    def _encode(self, texts: Sequence[str]) -> np.ndarray:
         try:
-            vectors = self._embed(list(texts))
+            vectors = np.asarray(self._embed(list(texts)), dtype=np.float32)
         except Exception as exc:
             raise RuntimeError("The search model is unavailable.") from exc
-        if len(vectors) != len(texts):
+        if vectors.ndim != 2 or len(vectors) != len(texts):
             raise RuntimeError("The search model is unavailable.")
-        return [_normalize(vector) for vector in vectors]
+        lengths = np.linalg.norm(vectors, axis=1, keepdims=True)
+        return vectors / np.where(lengths == 0, 1, lengths)
 
-    def index(self, document_id: str, passages: list[Passage]) -> list[list[float]]:
+    def index(self, document_id: str, passages: list[Passage]) -> np.ndarray:
         key = tuple(passage.id for passage in passages)
         vectors = self._encode([passage.text for passage in passages])
         with self._lock:
@@ -65,39 +74,45 @@ class EmbeddingSearch:
     def retrieve(
         self, document_id: str, passages: list[Passage], question: str, limit: int = 3
     ) -> list[Passage]:
+        if not passages:
+            return []
         key = tuple(passage.id for passage in passages)
         with self._lock:
             cached = self._vectors.get(document_id)
         vectors = cached[1] if cached and cached[0] == key else self.index(document_id, passages)
-        query = self._encode([question])[0]
-        scores = [sum(a * b for a, b in zip(vector, query)) for vector in vectors]
+        scores = vectors @ self._encode([question])[0]
         order = sorted(
             range(len(passages)), key=lambda i: (-scores[i], passages[i].page, passages[i].id)
         )
-        if not order or scores[order[0]] < self._min_score:
+        best = [i for i in order[:limit] if scores[i] >= self._min_score]
+        if not best:
             return retrieve(passages, question, limit)
-        return [passages[i] for i in order[:limit]]
-
-
-def _normalize(vector: Sequence[float]) -> list[float]:
-    values = [float(value) for value in vector]
-    length = math.sqrt(sum(value * value for value in values))
-    return [value / length for value in values] if length else values
+        return [passages[i] for i in best]
 
 
 def fastembed_embedder(model_name: str = MODEL_NAME) -> Embedder:
-    """Load the fastembed model on first use, from FASTEMBED_CACHE_PATH when it is set."""
+    """Load the fastembed model on first use, from FASTEMBED_CACHE_PATH when it is set.
+
+    One embedding runs at a time, so two uploads cannot double the memory use.
+    """
     model = None
+    failed_at: float | None = None
     lock = threading.Lock()
 
-    def embed(texts: Sequence[str]) -> list[list[float]]:
-        nonlocal model
+    def embed(texts: Sequence[str]) -> list[np.ndarray]:
+        nonlocal model, failed_at
         with lock:
             if model is None:
-                from fastembed import TextEmbedding
+                if failed_at is not None and time.monotonic() - failed_at < RETRY_SECONDS:
+                    raise RuntimeError("The search model failed to load recently.")
+                try:
+                    from fastembed import TextEmbedding
 
-                model = TextEmbedding(model_name)
-        return [vector.tolist() for vector in model.embed(list(texts))]
+                    model = TextEmbedding(model_name, enable_cpu_mem_arena=False)
+                except Exception:
+                    failed_at = time.monotonic()
+                    raise
+            return list(model.embed(list(texts), batch_size=BATCH_SIZE))
 
     return embed
 

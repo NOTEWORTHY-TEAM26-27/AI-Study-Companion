@@ -98,10 +98,13 @@ and sends only those to the model. `RETRIEVAL` selects how:
   the all-MiniLM-L6-v2 model from the Sprint 1 RAG test (`research/rag/`), run
   through `fastembed` on the CPU. It also finds passages that use different
   words than the question. Passage vectors are computed at upload, or on the
-  first question after a restart, and kept in memory.
+  first question after a restart, and kept in memory. On one CPU core this
+  takes about 0.08 seconds per passage (115 words), so a 200-passage PDF adds
+  about 15 seconds to the upload. Embedding peaks near 260 MB of memory.
 
-If no passage is similar enough (score below 0.25), keyword search decides, so an
-unrelated question still returns "The PDF does not say." without a model call.
+Passages that score below 0.25 are not sent to the model. If none are left,
+keyword search decides as before, so a question that shares no words with the
+PDF still returns "The PDF does not say." without a model call.
 On Sunil's 10 Scrum questions (`research/rag/`), the right page came first for
 10 of 10 with embedding search and 6 of 10 with keyword search.
 

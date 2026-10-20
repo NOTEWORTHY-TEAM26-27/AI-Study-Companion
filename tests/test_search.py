@@ -1,14 +1,18 @@
 import os
+import sys
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from noteworthy_app.core import Passage
 from noteworthy_app.search import (
+    BATCH_SIZE,
     MODEL_NAME,
     EmbeddingSearch,
     KeywordSearch,
     create_search,
+    fastembed_embedder,
 )
 
 PASSAGES = [
@@ -43,9 +47,9 @@ class EmbeddingSearchTests(unittest.TestCase):
         self.embed = FakeEmbedder()
         self.search = EmbeddingSearch(self.embed)
 
-    def test_ranks_passages_by_meaning(self):
+    def test_ranks_passages_by_meaning_and_drops_weak_matches(self):
         matches = self.search.retrieve("doc", PASSAGES, "How do plants make food?")
-        self.assertEqual([passage.id for passage in matches], ["p1-1", "p1-2", "p2-1"])
+        self.assertEqual([passage.id for passage in matches], ["p1-1", "p1-2"])
         matches = self.search.retrieve("doc", PASSAGES, "Where are proteins built?", limit=1)
         self.assertEqual([passage.id for passage in matches], ["p2-1"])
 
@@ -79,6 +83,58 @@ class EmbeddingSearchTests(unittest.TestCase):
         search = EmbeddingSearch(lambda texts: [[0.0, 0.0] for _ in texts])
         self.assertEqual(search.retrieve("doc", PASSAGES, "quantum gravity"), [])
 
+    def test_no_passages_returns_nothing(self):
+        self.assertEqual(self.search.retrieve("doc", [], "quantum gravity"), [])
+        self.assertEqual(self.embed.calls, [])
+
+
+class FakeTextEmbedding:
+    """Stands in for fastembed.TextEmbedding; records how the app calls it."""
+
+    created = []
+    batch_sizes = []
+    fail = False
+
+    def __init__(self, model_name, **options):
+        FakeTextEmbedding.created.append((model_name, options))
+        if FakeTextEmbedding.fail:
+            raise OSError("download failed")
+
+    def embed(self, texts, batch_size):
+        FakeTextEmbedding.batch_sizes.append(batch_size)
+        return iter([[1.0, 0.0] for _ in texts])
+
+
+class FastembedEmbedderTests(unittest.TestCase):
+    def setUp(self):
+        FakeTextEmbedding.created = []
+        FakeTextEmbedding.batch_sizes = []
+        FakeTextEmbedding.fail = False
+        module = types.ModuleType("fastembed")
+        module.TextEmbedding = FakeTextEmbedding
+        self.enterContext(mock.patch.dict(sys.modules, {"fastembed": module}))
+
+    def test_model_loads_once_with_low_memory_settings(self):
+        embed = fastembed_embedder()
+        self.assertEqual(FakeTextEmbedding.created, [])
+        self.assertEqual(len(embed(["a", "b"])), 2)
+        embed(["c"])
+        self.assertEqual(FakeTextEmbedding.created, [(MODEL_NAME, {"enable_cpu_mem_arena": False})])
+        self.assertEqual(FakeTextEmbedding.batch_sizes, [BATCH_SIZE, BATCH_SIZE])
+
+    def test_failed_load_is_not_retried_right_away(self):
+        FakeTextEmbedding.fail = True
+        embed = fastembed_embedder()
+        with self.assertRaises(OSError):
+            embed(["a"])
+        with self.assertRaisesRegex(RuntimeError, "failed to load recently"):
+            embed(["a"])
+        self.assertEqual(len(FakeTextEmbedding.created), 1)
+        FakeTextEmbedding.fail = False
+        with mock.patch("noteworthy_app.search.time.monotonic", return_value=float("inf")):
+            self.assertEqual(len(embed(["a"])), 1)
+        self.assertEqual(len(FakeTextEmbedding.created), 2)
+
 
 class CreateSearchTests(unittest.TestCase):
     def test_keyword_is_the_default(self):
@@ -88,6 +144,7 @@ class CreateSearchTests(unittest.TestCase):
     def test_embedding_mode_loads_the_model_on_first_use(self):
         with mock.patch.dict(os.environ, {"RETRIEVAL": " Embedding "}):
             self.assertIsInstance(create_search(), EmbeddingSearch)
+        self.assertNotIn("fastembed", sys.modules)
 
     def test_unknown_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported RETRIEVAL"):
