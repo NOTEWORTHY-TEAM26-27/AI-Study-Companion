@@ -55,6 +55,7 @@ class ServerTests(unittest.TestCase):
             },
         )
         self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "ready")
         return payload["id"]
 
     def test_health_does_not_call_model(self):
@@ -72,7 +73,9 @@ class ServerTests(unittest.TestCase):
         document_id = self.upload()
         status, content = self.request("/api/documents")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(content)["documents"][0]["id"], document_id)
+        listed = json.loads(content)["documents"][0]
+        self.assertEqual(listed["id"], document_id)
+        self.assertEqual(listed["status"], "ready")
         status, result = self.post(
             "/api/ask", {"document_id": document_id, "question": "Photosynthesis sunlight"}
         )

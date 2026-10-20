@@ -26,10 +26,13 @@
   .quiz-question label { font-weight: 400; margin: 6px 0; }
   .scorebar { margin: 10px 0; }
   .scorebar span { display: block; height: 8px; background: #000; }
+  .document { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid #ccc; }
+  .document span { min-width: 0; overflow-wrap: anywhere; }
+  .document button { margin-top: 0; padding: 4px 10px; }
 </style>
 <header><p class="eyebrow">NoteWorthy / Sprint 1 prototype</p><h1>Ask your notes.</h1><p class="muted">Upload one typed PDF, ask a question, and inspect the passages behind the answer.</p></header>
 <main class="grid">
-  <section><h2>Your PDF</h2><label for="pdf">Choose a typed PDF</label><input id="pdf" type="file" accept="application/pdf,.pdf"><br><button id="upload">Upload PDF</button><p id="status" role="status" class="muted"></p><div id="documents"></div></section>
+  <section><h2>Your PDF</h2><label for="pdf">Choose a typed PDF</label><input id="pdf" type="file" accept="application/pdf,.pdf"><p class="muted">PDF only, up to 12 MB.</p><button id="upload">Upload PDF</button><p id="status" role="status" class="muted"></p><div id="documents"></div></section>
   <section><h2>Ask a question</h2><label for="question">Question</label><input id="question" type="text" placeholder="What does the document say about…?"><button id="ask" disabled>Find answer</button><p id="answer" aria-live="polite"></p></section>
 </main>
 <section style="margin-top:18px"><h2>Source passages</h2><div id="sources" class="muted">Sources for the answer appear here.</div></section>
@@ -38,44 +41,122 @@
 <script>
   let selectedDocument = null;
   let currentQuiz = [];
+  let storedDocuments = [];
+  let pendingUploads = [];
+  let askBusy = false;
+  let quizBusy = false;
+  const MAX_PDF_BYTES = 12 * 1024 * 1024;
+  const MY_DOCUMENTS_KEY = 'noteworthy-my-documents';
+  const STATUS_LABELS = {processing: 'Processing…', ready: 'Ready', failed: 'Failed'};
   const $ = id => document.getElementById(id);
   async function api(path, body) {
     const response = await fetch(path, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Request failed');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'The server is not responding. Try again in a minute.');
     return data;
   }
-  function renderDocuments(documents) {
-    const list = $('documents'); list.replaceChildren();
-    for (const uploadedDocument of documents) {
-      const item = document.createElement('p');
-      item.textContent = `${uploadedDocument.name} · ${uploadedDocument.passages} passages`;
-      list.append(item);
+  // There are no accounts yet, so the list shows only documents uploaded from this browser.
+  function myDocumentIds() {
+    try {
+      const ids = JSON.parse(localStorage.getItem(MY_DOCUMENTS_KEY) || '[]');
+      return new Set(Array.isArray(ids) ? ids : []);
+    } catch (error) { return new Set(); }
+  }
+  function rememberDocument(id) {
+    const ids = myDocumentIds(); ids.add(id);
+    try { localStorage.setItem(MY_DOCUMENTS_KEY, JSON.stringify([...ids])); } catch (error) { /* storage unavailable */ }
+  }
+  function checkFile(file) {
+    if (!file) return 'Choose a PDF first.';
+    if (!file.name.toLowerCase().endsWith('.pdf')) return 'Choose a PDF file.';
+    if (file.size === 0) return 'The file is empty. Choose a PDF that has content.';
+    if (file.size > MAX_PDF_BYTES) return 'The PDF is larger than 12 MB. Choose a smaller file.';
+    return '';
+  }
+  function selectDocument(uploadedDocument) {
+    if (!selectedDocument || selectedDocument.id !== uploadedDocument.id) {
+      // Clear the previous document's answer and quiz so they are not mistaken for this one.
+      $('answer').textContent = '';
+      $('sources').textContent = 'Sources for the answer appear here.';
+      $('quiz').replaceChildren(); $('quizResult').textContent = ''; currentQuiz = [];
     }
+    selectedDocument = uploadedDocument;
+    $('ask').disabled = askBusy;
+    $('makeQuiz').disabled = quizBusy;
+    $('status').textContent = `Selected: ${uploadedDocument.name}.`;
+    renderDocuments(storedDocuments);
+  }
+  function renderDocuments(documents) {
+    storedDocuments = documents;
+    const nameCounts = new Map();
+    for (const item of documents) nameCounts.set(item.name, (nameCounts.get(item.name) || 0) + 1);
+    const list = $('documents'); list.replaceChildren();
+    for (const uploadedDocument of [...documents, ...pendingUploads]) {
+      const row = document.createElement('div'); row.className = 'document';
+      const text = document.createElement('span');
+      const status = uploadedDocument.status || 'ready';
+      const parts = [uploadedDocument.name];
+      if (uploadedDocument.id && nameCounts.get(uploadedDocument.name) > 1) parts.push(`ID ${uploadedDocument.id.slice(0, 6)}`);
+      if (uploadedDocument.passages !== undefined) parts.push(`${uploadedDocument.passages} passages`);
+      parts.push(status === 'failed' && uploadedDocument.error ? `Failed: ${uploadedDocument.error}` : STATUS_LABELS[status] || status);
+      text.textContent = parts.join(' · ');
+      row.append(text);
+      if (status === 'ready' && uploadedDocument.id) {
+        const choose = document.createElement('button');
+        const chosen = selectedDocument && selectedDocument.id === uploadedDocument.id;
+        choose.textContent = chosen ? 'Selected' : 'Use';
+        choose.disabled = Boolean(chosen);
+        choose.onclick = () => selectDocument(uploadedDocument);
+        row.append(choose);
+      }
+      list.append(row);
+    }
+  }
+  async function loadDocuments() {
+    try {
+      const response = await fetch('/api/documents');
+      if (!response.ok) throw new Error('Could not load your documents.');
+      const mine = myDocumentIds();
+      renderDocuments(((await response.json()).documents || []).filter(item => mine.has(item.id)));
+    } catch (error) { $('status').textContent = 'Could not load your documents.'; }
   }
   $('upload').onclick = async () => {
     const file = $('pdf').files[0];
-    if (!file) { $('status').textContent = 'Choose a PDF first.'; return; }
+    const problem = checkFile(file);
+    if (problem) { $('status').textContent = problem; return; }
+    const pending = {name: file.name, status: 'processing'};
+    pendingUploads = pendingUploads.filter(item => item.name !== file.name).concat(pending);
+    renderDocuments(storedDocuments);
     $('upload').disabled = true; $('status').textContent = 'Reading PDF…';
     try {
       const data = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result).split(',')[1]);
-        reader.onerror = reject; reader.readAsDataURL(file);
+        reader.onerror = () => reject(new Error('The file could not be read. Choose it again.'));
+        reader.readAsDataURL(file);
       });
-      selectedDocument = await api('/api/upload', {name: file.name, data});
-      $('status').textContent = `Ready: ${selectedDocument.passages} passages from ${file.name}.`;
-      $('ask').disabled = false;
-      $('makeQuiz').disabled = false;
-      renderDocuments((await fetch('/api/documents').then(r => r.json())).documents);
-    } catch (error) { $('status').textContent = error.message; }
+      const uploaded = await api('/api/upload', {name: file.name, data});
+      pendingUploads = pendingUploads.filter(item => item !== pending);
+      rememberDocument(uploaded.id);
+      await loadDocuments();
+      if (!storedDocuments.some(item => item.id === uploaded.id)) storedDocuments = storedDocuments.concat(uploaded);
+      selectDocument(uploaded);
+      $('status').textContent = `Ready: ${uploaded.passages} passages from ${file.name}.`;
+    } catch (error) {
+      const message = error.message || 'Upload failed. Try again.';
+      pending.status = 'failed'; pending.error = message;
+      $('status').textContent = message;
+      renderDocuments(storedDocuments);
+    }
     finally { $('upload').disabled = false; }
   };
   $('ask').onclick = async () => {
-    if (!selectedDocument) return;
-    $('ask').disabled = true; $('answer').textContent = 'Finding an answer…';
+    if (!selectedDocument || askBusy) return;
+    const documentId = selectedDocument.id;
+    askBusy = true; $('ask').disabled = true; $('answer').textContent = 'Finding an answer…';
     try {
-      const result = await api('/api/ask', {document_id: selectedDocument.id, question: $('question').value});
+      const result = await api('/api/ask', {document_id: documentId, question: $('question').value});
+      if (!selectedDocument || selectedDocument.id !== documentId) return;
       $('answer').textContent = result.answer;
       const sources = $('sources'); sources.replaceChildren();
       for (const source of result.sources) {
@@ -84,8 +165,10 @@
         const text = document.createElement('p'); text.textContent = source.text;
         item.append(title, text); sources.append(item);
       }
-    } catch (error) { $('answer').textContent = error.message; }
-    finally { $('ask').disabled = false; }
+    } catch (error) {
+      if (selectedDocument && selectedDocument.id === documentId) $('answer').textContent = error.message;
+    }
+    finally { askBusy = false; $('ask').disabled = !selectedDocument; }
   };
   function showScores() {
     const scores = JSON.parse(localStorage.getItem('noteworthy-topic-scores') || '{}');
@@ -101,9 +184,12 @@
     }
   }
   $('makeQuiz').onclick = async () => {
-    $('makeQuiz').disabled = true; $('quizResult').textContent = 'Generating questions…';
+    if (!selectedDocument || quizBusy) return;
+    const documentId = selectedDocument.id;
+    quizBusy = true; $('makeQuiz').disabled = true; $('quizResult').textContent = 'Generating questions…';
     try {
-      const result = await api('/api/quiz', {document_id: selectedDocument.id});
+      const result = await api('/api/quiz', {document_id: documentId});
+      if (!selectedDocument || selectedDocument.id !== documentId) return;
       currentQuiz = result.questions;
       const container = $('quiz'); container.replaceChildren();
       currentQuiz.forEach((item, index) => {
@@ -136,9 +222,12 @@
         submit.disabled = true; showScores();
       };
       container.append(submit); $('quizResult').textContent = '';
-    } catch (error) { $('quizResult').textContent = error.message; }
-    finally { $('makeQuiz').disabled = false; }
+    } catch (error) {
+      if (selectedDocument && selectedDocument.id === documentId) $('quizResult').textContent = error.message;
+    }
+    finally { quizBusy = false; $('makeQuiz').disabled = !selectedDocument; }
   };
   showScores();
+  loadDocuments();
 </script>
 </html>
