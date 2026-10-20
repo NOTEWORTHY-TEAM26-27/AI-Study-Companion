@@ -28,20 +28,23 @@ The AI Study Companion will explore features such as:
 
 ## Development Workflow
 
-1. Do not develop directly on `main`.
-2. Create a branch for your task.
-3. Make and test your changes.
+1. Do not develop directly on `main`; it only changes through a Pull Request.
+2. Create a branch for your task named `<github-user>/SCRUM-<n>/<short-desc>`,
+   for example `DavidHuynh01/SCRUM-62/readme-setup-deploy`.
+3. Make and test your changes (see Checks and packaging).
 4. Push your branch to GitHub.
 5. Open a Pull Request into `main`.
 6. Have another team member review the Pull Request (or do it yourself).
-7. Merge the Pull Request after review.
+7. Merge the Pull Request after review. Staging then deploys on its own (see
+   Staging and deploy).
 
 ## Project Status
 
-Currently in **Sprint 2**. This scaffold starts
-[SCRUM-56](https://noteworthy-uta.atlassian.net/browse/SCRUM-56) by bringing the
-available Python PDF, retrieval, and quiz prototype into one runnable app.
-The remaining team prototypes still need to be integrated.
+Currently in **Sprint 2** (10/05 to 10/23). One app runs locally, in Docker, and
+on staging at <https://143-244-212-41.sslip.io>. Prototype integration
+([SCRUM-56](https://noteworthy-uta.atlassian.net/browse/SCRUM-56)) is still in
+progress: retrieval is keyword based, and the question generation and knowledge
+graph research code is in `research/` but not used by the app yet.
 
 ## Local setup
 
@@ -58,13 +61,27 @@ set -a; source .env; set +a
 make run PYTHON=python
 ```
 
+On Windows, use Git Bash (installed with Git for Windows). The steps are the same
+except for the activate path, and `make` is not included, so start the app
+directly:
+
+```bash
+python -m venv .venv
+source .venv/Scripts/activate
+python -m pip install -r requirements-dev.txt
+python -m pip install --no-deps -e .
+cp .env.example .env
+set -a; source .env; set +a
+python -m noteworthy_app.server
+```
+
 Open <http://127.0.0.1:8000>. Upload a typed PDF to extract its text and generate
 a five-question practice quiz. Answer generation additionally requires Ollama
 running at `OLLAMA_URL` with the model named by `OLLAMA_MODEL` available. The
 defaults match the existing prototype. Set `AI_PROVIDER=digitalocean` and
-`DIGITALOCEAN_API_KEY` to use the hosted model instead (staging does this). An unavailable model returns HTTP 503;
-startup, health checks, extraction, quizzes, and automated tests do not require
-Ollama, cloud credentials, or student files.
+`DIGITALOCEAN_API_KEY` to use the hosted model instead (staging does this). An
+unavailable model returns HTTP 503; startup, health checks, extraction, quizzes,
+and automated tests do not require Ollama, cloud credentials, or student files.
 
 The `.env` file is loaded by the shell commands above, not automatically by the
 application. `HOST` and `PORT` control the bind address. The installed command
@@ -147,6 +164,32 @@ docker build -t noteworthy-app .
 The build context includes only application source and required package metadata;
 Git history, `.env`, uploads, tests, and development tooling are excluded.
 
+## Staging and deploy
+
+Staging runs at <https://143-244-212-41.sslip.io> on one DigitalOcean Droplet,
+using `compose.yaml` plus `compose.staging.yaml` (the app and Caddy for HTTPS).
+`GET /health` should return `{"status": "ok"}`.
+
+- **Automatic:** every merge to `main` deploys staging after CI passes
+  (`.github/workflows/deploy-staging.yml`). The "Deploy to staging" run shows in
+  the Actions tab, and it can also be started there with Run workflow.
+- **By hand:** connect as the `deploy` user and run the deploy script, which
+  pulls `main`, rebuilds, restarts, and waits for `/health`:
+
+  ```bash
+  ssh deploy@143.244.212.41
+  cd ~/noteworthy && ./scripts/deploy_staging.sh
+  ```
+
+- **Settings:** the server's `~/noteworthy/.env` (never committed) holds
+  `STAGING_HOST` and the model settings (`AI_PROVIDER=digitalocean` and
+  `DIGITALOCEAN_API_KEY`). Run the deploy script after changing it.
+- **Logs:** `docker compose -f compose.yaml -f compose.staging.yaml logs --tail=100 app`
+  on the server.
+
+First-time server setup, the key for automatic deploys, and how to turn
+automatic deploys off are in `deploy/STAGING.md`.
+
 ## Checks and packaging
 
 After setup, these commands work locally and can be used by CI:
@@ -155,6 +198,14 @@ After setup, these commands work locally and can be used by CI:
 make check PYTHON=python          # Ruff lint/format check and offline unittest suite
 make test PYTHON=python           # tests only
 make build PYTHON=python          # wheel and source distribution in dist/
+```
+
+Without `make` (for example in Git Bash on Windows), run the same checks
+directly:
+
+```bash
+python -m ruff check . && python -m ruff format --check .
+python -m unittest discover -s tests -v
 ```
 
 Use `make format PYTHON=python` to apply formatting and import fixes. An optional
@@ -176,6 +227,8 @@ outside the source checkout. Runtime dependencies are pinned in
 | `noteworthy_app/storage.py` | Save original PDFs and passages; restore documents on startup |
 | `noteworthy_app/static/index.html` | Existing upload, answer, quiz, and browser-local score interface |
 | `tests/` | Offline extraction, quiz, model adapter, and HTTP behavior checks |
+| `research/` | Question generation and knowledge graph research scripts (not used by the app yet) |
+| `deploy/`, `scripts/` | Staging server files, the deploy script, and the deploy key setup |
 
 The server accepts an answer generator through `create_server(...)`, so the
 model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
@@ -195,28 +248,24 @@ The PDF limit is 12 MiB. Invalid JSON and fields return 400, missing routes or
 documents return 404, oversized uploads return 413, storage failures return 500,
 and model failures return 503.
 
-## Prototype limits and Sprint 2 handoff
+## Prototype limits and Sprint 2 status
 
-This is a local development baseline. Documents are shared within one server
-instance and persist in its configured storage directory; scores live in browser
-local storage. The frontend's document library and processing-status work remains
-under SCRUM-65; the existing page lists documents after an upload. There is no
-login, per-student isolation, database, OCR, or
-OneDrive/Canvas import in this scaffold. It retains lexical passage retrieval
-and the existing cloze quiz rather than claiming all team prototypes are merged.
+This is a development baseline. Documents are shared within one server instance
+and persist in its configured storage directory; scores live in browser local
+storage. The new upload page and document processing status (SCRUM-63,
+SCRUM-65) are not merged yet; the existing page lists documents after an upload.
+There is no login, per-student isolation, database, OCR, or OneDrive/Canvas
+import yet. The app keeps lexical passage retrieval and the existing cloze quiz
+rather than claiming all team prototypes are merged.
 
-The follow-up order under SCRUM-11 is:
+Sprint 2 work under SCRUM-11:
 
-1. Complete remaining prototype integration under SCRUM-56 (John).
-2. Set up the DigitalOcean account under SCRUM-57 (David), alongside app
-   integration.
-3. Containerize the app under SCRUM-58 (David). Set `HOST=0.0.0.0` in a container;
-   the local default binds only to loopback.
-4. Run the check commands and Docker build under SCRUM-59 (David).
-5. Add DigitalOcean serverless inference for staging under SCRUM-60 (Sunil), in
-   parallel; Ollama stays for local development.
-6. Deploy staging under SCRUM-61 (David, steps in `deploy/STAGING.md`), then
-   record the actual deployment commands and URL under SCRUM-62 (John).
+- Done: DigitalOcean account (SCRUM-57), Docker and Compose (SCRUM-58), CI
+  (SCRUM-59), staging (SCRUM-61), setup and deploy docs (SCRUM-62), and deploy on
+  merge (SCRUM-79).
+- In review: hosted model switching (SCRUM-60), merged; confirmed once the model
+  key is set on staging.
+- Open: remaining prototype integration (SCRUM-56, John).
 
 ## Continuous integration
 
@@ -233,7 +282,4 @@ require CI before merging, select `repository-check` as a required status check
 in the ruleset for `main`.
 
 `.github/workflows/deploy-staging.yml` deploys staging after CI passes on a push
-to `main` (SCRUM-79). Setup and how to turn it off are in `deploy/STAGING.md`.
-
-Docker, Compose, CI, the DigitalOcean account, staging, and the hosted model
-switch (SCRUM-60) are done; SCRUM-11 is still In Progress.
+to `main` (SCRUM-79); see Staging and deploy.
