@@ -13,7 +13,8 @@ WORKDIR /app
 # The model name must match MODEL_NAME in noteworthy_app/search.py.
 COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt \
-    && python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/all-MiniLM-L6-v2')"
+    && python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/all-MiniLM-L6-v2')" \
+    && chmod -R a+rX /opt/fastembed
 # The model is in the image, so the app never downloads it at runtime.
 ENV HF_HUB_OFFLINE=1
 COPY pyproject.toml README.md ./

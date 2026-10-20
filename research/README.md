@@ -1,7 +1,8 @@
 # Research
 
-Research code for the AI features. None of this runs in the web app yet. The app in
+Research code for the AI features. None of this runs in the web app. The app in
 `noteworthy_app/` is what gets deployed, and the Docker image does not include this folder.
+The app's embedding search (`noteworthy_app/search.py`) uses the same model as `rag/`.
 
 | Folder | What it is | Jira |
 |---|---|---|

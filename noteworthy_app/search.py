@@ -19,7 +19,8 @@ MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Best match scores measured on Week1_B.pdf: related questions 0.27 to 0.78, unrelated 0.02 to 0.22.
 MIN_SCORE = 0.25
 # Small batches without onnxruntime's memory arena keep embedding near 260 MB on the 2 GB
-# staging Droplet. fastembed's default batch of 256 held over 1 GB after a 200-passage PDF.
+# staging Droplet (about 60 MB more for each upload running at the same time). fastembed's
+# default batch of 256 held over 1 GB after a 200-passage PDF.
 BATCH_SIZE = 16
 # After a failed model load, fail fast for this long instead of retrying the download each time.
 RETRY_SECONDS = 60
@@ -52,9 +53,12 @@ class EmbeddingSearch:
         self._embed = embed
         self._min_score = min_score
         self._vectors: dict[str, tuple[tuple[str, ...], np.ndarray]] = {}
+        self._indexing: dict[str, threading.Lock] = {}
         self._lock = threading.Lock()
 
     def _encode(self, texts: Sequence[str]) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, 0), dtype=np.float32)
         try:
             vectors = np.asarray(self._embed(list(texts)), dtype=np.float32)
         except Exception as exc:
@@ -64,11 +68,26 @@ class EmbeddingSearch:
         lengths = np.linalg.norm(vectors, axis=1, keepdims=True)
         return vectors / np.where(lengths == 0, 1, lengths)
 
-    def index(self, document_id: str, passages: list[Passage]) -> np.ndarray:
-        key = tuple(passage.id for passage in passages)
-        vectors = self._encode([passage.text for passage in passages])
+    def _cached(self, document_id: str, key: tuple[str, ...]) -> np.ndarray | None:
         with self._lock:
-            self._vectors[document_id] = (key, vectors)
+            cached = self._vectors.get(document_id)
+        return cached[1] if cached and cached[0] == key else None
+
+    def index(self, document_id: str, passages: list[Passage]) -> np.ndarray:
+        """Embed a document's passages, unless the same passages are already cached.
+
+        The document id is a hash of the PDF, so a re-upload reuses the cached vectors. Requests
+        for one document wait for a single embedding instead of each computing their own.
+        """
+        key = tuple(passage.id for passage in passages)
+        with self._lock:
+            document_lock = self._indexing.setdefault(document_id, threading.Lock())
+        with document_lock:
+            vectors = self._cached(document_id, key)
+            if vectors is None:
+                vectors = self._encode([passage.text for passage in passages])
+                with self._lock:
+                    self._vectors[document_id] = (key, vectors)
         return vectors
 
     def retrieve(
@@ -77,9 +96,9 @@ class EmbeddingSearch:
         if not passages:
             return []
         key = tuple(passage.id for passage in passages)
-        with self._lock:
-            cached = self._vectors.get(document_id)
-        vectors = cached[1] if cached and cached[0] == key else self.index(document_id, passages)
+        vectors = self._cached(document_id, key)
+        if vectors is None:
+            vectors = self.index(document_id, passages)
         scores = vectors @ self._encode([question])[0]
         order = sorted(
             range(len(passages)), key=lambda i: (-scores[i], passages[i].page, passages[i].id)
@@ -93,7 +112,8 @@ class EmbeddingSearch:
 def fastembed_embedder(model_name: str = MODEL_NAME) -> Embedder:
     """Load the fastembed model on first use, from FASTEMBED_CACHE_PATH when it is set.
 
-    One embedding runs at a time, so two uploads cannot double the memory use.
+    Only loading is locked. Embedding runs in parallel, so a question is not stuck behind
+    another user's upload.
     """
     model = None
     failed_at: float | None = None
@@ -112,7 +132,8 @@ def fastembed_embedder(model_name: str = MODEL_NAME) -> Embedder:
                 except Exception:
                     failed_at = time.monotonic()
                     raise
-            return list(model.embed(list(texts), batch_size=BATCH_SIZE))
+            loaded = model
+        return list(loaded.embed(list(texts), batch_size=BATCH_SIZE))
 
     return embed
 

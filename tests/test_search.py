@@ -1,9 +1,13 @@
 import os
 import sys
+import threading
+import time
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
+
+import numpy as np
 
 from noteworthy_app.core import Passage
 from noteworthy_app.search import (
@@ -60,9 +64,50 @@ class EmbeddingSearchTests(unittest.TestCase):
         passage_calls = [call for call in self.embed.calls if len(call) == len(PASSAGES)]
         self.assertEqual(len(passage_calls), 1)
 
+    def test_reupload_reuses_cached_vectors(self):
+        self.search.index("doc", PASSAGES)
+        self.search.index("doc", PASSAGES)
+        self.assertEqual(len(self.embed.calls), 1)
+
+    def test_simultaneous_first_questions_embed_the_document_once(self):
+        started = threading.Event()
+
+        def slow_embed(texts):
+            started.set()
+            time.sleep(0.05)
+            return self.embed(texts)
+
+        search = EmbeddingSearch(slow_embed)
+        threads = [
+            threading.Thread(
+                target=search.retrieve, args=("doc", PASSAGES, "How do plants make food?")
+            )
+            for _ in range(3)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        passage_calls = [call for call in self.embed.calls if len(call) == len(PASSAGES)]
+        self.assertTrue(started.is_set())
+        self.assertEqual(len(passage_calls), 1)
+
     def test_changed_passages_are_embedded_again(self):
         self.search.index("doc", PASSAGES[:2])
         matches = self.search.retrieve("doc", PASSAGES, "Where are proteins built?", limit=1)
+        self.assertEqual([passage.id for passage in matches], ["p2-1"])
+
+    def test_returns_at_most_limit_passages(self):
+        passages = [Passage(f"p{n}-1", n, f"text {n}") for n in range(1, 6)]
+        search = EmbeddingSearch(lambda texts: [[1.0, 0.05 * len(text)] for text in texts])
+        self.assertEqual(len(search.retrieve("doc", passages, "q")), 3)
+        self.assertEqual(len(search.retrieve("doc", passages, "q", limit=2)), 2)
+
+    def test_score_threshold_is_point_two_five(self):
+        vectors = {"above": [0.3, 0.954], "below": [0.2, 0.98], "question": [1.0, 0.0]}
+        passages = [Passage("p1-1", 1, "below"), Passage("p2-1", 2, "above")]
+        search = EmbeddingSearch(lambda texts: [vectors[text] for text in texts])
+        matches = search.retrieve("doc", passages, "question")
         self.assertEqual([passage.id for passage in matches], ["p2-1"])
 
     def test_low_scores_fall_back_to_keyword_search(self):
@@ -80,8 +125,11 @@ class EmbeddingSearchTests(unittest.TestCase):
             EmbeddingSearch(lambda texts: []).retrieve("doc", PASSAGES, "quantum gravity")
 
     def test_zero_vectors_do_not_divide_by_zero(self):
-        search = EmbeddingSearch(lambda texts: [[0.0, 0.0] for _ in texts])
-        self.assertEqual(search.retrieve("doc", PASSAGES, "quantum gravity"), [])
+        vectors = {PASSAGES[0].text: [0.0, 0.0], PASSAGES[1].text: [0.0, 3.0], "q": [0.0, 1.0]}
+        search = EmbeddingSearch(lambda texts: [vectors.get(text, [0.0, 0.0]) for text in texts])
+        with np.errstate(all="raise"):
+            matches = search.retrieve("doc", PASSAGES, "q")
+        self.assertEqual([passage.id for passage in matches], ["p1-2"])
 
     def test_no_passages_returns_nothing(self):
         self.assertEqual(self.search.retrieve("doc", [], "quantum gravity"), [])
@@ -94,14 +142,18 @@ class FakeTextEmbedding:
     created = []
     batch_sizes = []
     fail = False
+    meeting = None
 
     def __init__(self, model_name, **options):
         FakeTextEmbedding.created.append((model_name, options))
+        time.sleep(0.05)
         if FakeTextEmbedding.fail:
             raise OSError("download failed")
 
     def embed(self, texts, batch_size):
         FakeTextEmbedding.batch_sizes.append(batch_size)
+        if FakeTextEmbedding.meeting:
+            FakeTextEmbedding.meeting.wait()
         return iter([[1.0, 0.0] for _ in texts])
 
 
@@ -110,6 +162,7 @@ class FastembedEmbedderTests(unittest.TestCase):
         FakeTextEmbedding.created = []
         FakeTextEmbedding.batch_sizes = []
         FakeTextEmbedding.fail = False
+        FakeTextEmbedding.meeting = None
         module = types.ModuleType("fastembed")
         module.TextEmbedding = FakeTextEmbedding
         self.enterContext(mock.patch.dict(sys.modules, {"fastembed": module}))
@@ -121,6 +174,20 @@ class FastembedEmbedderTests(unittest.TestCase):
         embed(["c"])
         self.assertEqual(FakeTextEmbedding.created, [(MODEL_NAME, {"enable_cpu_mem_arena": False})])
         self.assertEqual(FakeTextEmbedding.batch_sizes, [BATCH_SIZE, BATCH_SIZE])
+
+    def test_parallel_first_calls_load_once_and_embed_side_by_side(self):
+        # Both embeds must be running at the same time to pass the barrier, so a question
+        # is never queued behind another request's whole upload.
+        FakeTextEmbedding.meeting = threading.Barrier(2, timeout=5)
+        embed = fastembed_embedder()
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(embed(["a"]))) for _ in "ab"]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(FakeTextEmbedding.created), 1)
 
     def test_failed_load_is_not_retried_right_away(self):
         FakeTextEmbedding.fail = True

@@ -169,8 +169,24 @@ class ServerTests(unittest.TestCase):
                 [1.0, 0.0] if "hotosynthesis" in t or "leaves" in t else [0.0, 1.0] for t in texts
             ]
 
-        self.server.search = EmbeddingSearch(embed)
+        answer_generator = self.server.answer_generator
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.server = create_server(
+            "127.0.0.1",
+            0,
+            answer_generator=answer_generator,
+            data_dir=self.data_dir,
+            search=EmbeddingSearch(embed),
+        )
+        self.thread = threading.Thread(
+            target=lambda: self.server.serve_forever(poll_interval=0.01), daemon=True
+        )
+        self.thread.start()
         document_id = self.upload()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.upload(), document_id)
         self.assertEqual(len(calls), 1)
         status, result = self.post(
             "/api/ask", {"document_id": document_id, "question": "What makes green leaves work?"}

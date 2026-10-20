@@ -100,13 +100,16 @@ and sends only those to the model. `RETRIEVAL` selects how:
   words than the question. Passage vectors are computed at upload, or on the
   first question after a restart, and kept in memory. On one CPU core this
   takes about 0.08 seconds per passage (115 words), so a 200-passage PDF adds
-  about 15 seconds to the upload. Embedding peaks near 260 MB of memory.
+  about 15 seconds to the upload. Uploading the same PDF again reuses the
+  vectors. In our tests memory peaked near 260 MB, plus about 60 MB for each
+  other upload running at the same time.
 
-Passages that score below 0.25 are not sent to the model. If none are left,
-keyword search decides as before, so a question that shares no words with the
-PDF still returns "The PDF does not say." without a model call.
-On Sunil's 10 Scrum questions (`research/rag/`), the right page came first for
-10 of 10 with embedding search and 6 of 10 with keyword search.
+Passages that score below 0.25 are dropped. If none are left, keyword search
+picks the passages as before: a question that shares a word with the PDF can
+still reach the model, and one that shares no words returns "The PDF does not
+say." without a model call. On the 10 questions from Sunil's Sprint 1 RAG test
+(Week1_B.pdf, report on Jira under PBI 3), the right page came first for 10 of
+10 with embedding search and 6 of 10 with keyword search.
 
 The Docker image includes the search model, so containers never download it.
 The local app downloads it (about 90 MB) the first time `RETRIEVAL=embedding` is
@@ -255,7 +258,7 @@ outside the source checkout. Runtime dependencies are pinned in
 | `noteworthy_app/storage.py` | Save original PDFs and passages; restore documents on startup |
 | `noteworthy_app/static/index.html` | Existing upload, answer, quiz, and browser-local score interface |
 | `tests/` | Offline extraction, quiz, model adapter, and HTTP behavior checks |
-| `research/` | Question generation and knowledge graph research scripts (not used by the app yet) |
+| `research/` | Question generation, knowledge graph, and RAG search research scripts (not run by the app) |
 | `deploy/`, `scripts/` | Staging server files, the deploy script, and the deploy key setup |
 
 The server accepts an answer generator through `create_server(...)`, so the
