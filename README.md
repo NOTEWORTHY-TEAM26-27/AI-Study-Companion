@@ -43,8 +43,9 @@ The AI Study Companion will explore features such as:
 Currently in **Sprint 2** (10/05 to 10/23). One app runs locally, in Docker, and
 on staging at <https://143-244-212-41.sslip.io>. Prototype integration
 ([SCRUM-56](https://noteworthy-uta.atlassian.net/browse/SCRUM-56)) is still in
-progress: retrieval is keyword based, and the question generation and knowledge
-graph research code is in `research/` but not used by the app yet.
+progress: the app now has embedding search from the Sprint 1 RAG test (see
+Passage search), and the question generation and knowledge graph research code
+is in `research/` but not used by the app yet.
 
 ## Local setup
 
@@ -86,6 +87,28 @@ and automated tests do not require Ollama, cloud credentials, or student files.
 The `.env` file is loaded by the shell commands above, not automatically by the
 application. `HOST` and `PORT` control the bind address. The installed command
 `noteworthy-app` and `python -m noteworthy_app.server` are equivalent entry points.
+
+## Passage search
+
+Before answering, the app picks the three passages that best match the question
+and sends only those to the model. `RETRIEVAL` selects how:
+
+- `keyword` (default for the local app): ranks passages by shared words.
+- `embedding` (default in Docker and on staging): ranks passages by meaning with
+  the all-MiniLM-L6-v2 model from the Sprint 1 RAG test (`research/rag/`), run
+  through `fastembed` on the CPU. It also finds passages that use different
+  words than the question. Passage vectors are computed at upload, or on the
+  first question after a restart, and kept in memory.
+
+If no passage is similar enough (score below 0.25), keyword search decides, so an
+unrelated question still returns "The PDF does not say." without a model call.
+On Sunil's 10 Scrum questions (`research/rag/`), the right page came first for
+10 of 10 with embedding search and 6 of 10 with keyword search.
+
+The Docker image includes the search model, so containers never download it.
+The local app downloads it (about 90 MB) the first time `RETRIEVAL=embedding` is
+used; set `FASTEMBED_CACHE_PATH` to choose where it is kept. If the search model
+cannot load, uploads are still saved and questions return HTTP 503.
 
 ## Uploaded document storage
 
@@ -183,7 +206,8 @@ using `compose.yaml` plus `compose.staging.yaml` (the app and Caddy for HTTPS).
 
 - **Settings:** the server's `~/noteworthy/.env` (never committed) holds
   `STAGING_HOST` and the model settings (`AI_PROVIDER=digitalocean` and
-  `DIGITALOCEAN_API_KEY`). Run the deploy script after changing it.
+  `DIGITALOCEAN_API_KEY`). Staging uses embedding search unless `.env` sets
+  `RETRIEVAL=keyword`. Run the deploy script after changing it.
 - **Logs:** `docker compose -f compose.yaml -f compose.staging.yaml logs --tail=100 app`
   on the server.
 
@@ -220,7 +244,8 @@ outside the source checkout. Runtime dependencies are pinned in
 
 | Module | Responsibility |
 |---|---|
-| `noteworthy_app/core.py` | Typed PDF extraction, passage retrieval, and cited answer prompts |
+| `noteworthy_app/core.py` | Typed PDF extraction, keyword retrieval, and cited answer prompts |
+| `noteworthy_app/search.py` | Passage search setting: keyword or embedding search |
 | `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions |
 | `noteworthy_app/models.py` | Ollama and DigitalOcean adapter exposing `generate_answer(prompt) -> str` |
 | `noteworthy_app/server.py` | HTTP routes, validation, and in-memory document lookup |
@@ -255,7 +280,7 @@ and persist in its configured storage directory; scores live in browser local
 storage. The new upload page and document processing status (SCRUM-63,
 SCRUM-65) are not merged yet; the existing page lists documents after an upload.
 There is no login, per-student isolation, database, OCR, or OneDrive/Canvas
-import yet. The app keeps lexical passage retrieval and the existing cloze quiz
+import yet. The app has embedding search and keeps the existing cloze quiz
 rather than claiming all team prototypes are merged.
 
 Sprint 2 work under SCRUM-11:
