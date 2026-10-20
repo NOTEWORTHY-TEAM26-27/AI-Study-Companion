@@ -213,7 +213,7 @@ class ModelTests(unittest.TestCase):
             },
         ):
             with self.assertRaisesRegex(
-                ValueError,
+                RuntimeError,
                 "Unsupported AI_PROVIDER",
             ):
                 generate_answer("Test question")

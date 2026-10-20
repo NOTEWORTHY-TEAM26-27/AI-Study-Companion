@@ -61,7 +61,8 @@ make run PYTHON=python
 Open <http://127.0.0.1:8000>. Upload a typed PDF to extract its text and generate
 a five-question practice quiz. Answer generation additionally requires Ollama
 running at `OLLAMA_URL` with the model named by `OLLAMA_MODEL` available. The
-defaults match the existing prototype. An unavailable model returns HTTP 503;
+defaults match the existing prototype. Set `AI_PROVIDER=digitalocean` and
+`DIGITALOCEAN_API_KEY` to use the hosted model instead (staging does this). An unavailable model returns HTTP 503;
 startup, health checks, extraction, quizzes, and automated tests do not require
 Ollama, cloud credentials, or student files.
 
@@ -170,16 +171,16 @@ outside the source checkout. Runtime dependencies are pinned in
 |---|---|
 | `noteworthy_app/core.py` | Typed PDF extraction, passage retrieval, and cited answer prompts |
 | `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions |
-| `noteworthy_app/models.py` | Ollama adapter exposing `generate_answer(prompt) -> str` |
+| `noteworthy_app/models.py` | Ollama and DigitalOcean adapter exposing `generate_answer(prompt) -> str` |
 | `noteworthy_app/server.py` | HTTP routes, validation, and in-memory document lookup |
 | `noteworthy_app/storage.py` | Save original PDFs and passages; restore documents on startup |
 | `noteworthy_app/static/index.html` | Existing upload, answer, quiz, and browser-local score interface |
 | `tests/` | Offline extraction, quiz, model adapter, and HTTP behavior checks |
 
 The server accepts an answer generator through `create_server(...)`, so the
-model adapter can be swapped. Under SCRUM-60, `noteworthy_app/models.py` adds
-DigitalOcean serverless inference for staging, chosen by an environment
-variable, and keeps Ollama for local development.
+model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
+`AI_PROVIDER`: `ollama` (default, local) or `digitalocean` (serverless inference,
+`DIGITALOCEAN_API_KEY`, optional `DIGITALOCEAN_BASE_URL` and `DIGITALOCEAN_MODEL`).
 
 | Route | Behavior |
 |---|---|
@@ -234,5 +235,5 @@ in the ruleset for `main`.
 `.github/workflows/deploy-staging.yml` deploys staging after CI passes on a push
 to `main` (SCRUM-79). Setup and how to turn it off are in `deploy/STAGING.md`.
 
-Docker, Compose, CI, the DigitalOcean account, and staging are done. The hosted
-model (SCRUM-60) remains; SCRUM-11 is still In Progress.
+Docker, Compose, CI, the DigitalOcean account, staging, and the hosted model
+switch (SCRUM-60) are done; SCRUM-11 is still In Progress.
