@@ -103,8 +103,10 @@ class ServerTests(unittest.TestCase):
         status, content = self.request("/missing")
         self.assertEqual(status, 404)
         self.assertIn("error", json.loads(content))
-        status, _ = self.post("/missing", {})
+        # No body, because the server replies without reading one (see the invalid length test).
+        status, content = self.request("/missing", method="POST")
         self.assertEqual(status, 404)
+        self.assertIn("error", json.loads(content))
 
     def test_bad_json_and_non_object_payloads(self):
         for body in ["{", "[]", "null", "1"]:
@@ -114,13 +116,18 @@ class ServerTests(unittest.TestCase):
                 self.assertIn("error", json.loads(content))
 
     def test_invalid_length_returns_json_error(self):
-        status, content = self.request("/api/upload", "{}", {"Content-Length": "invalid"})
+        # Send no body: the server replies without reading it, and closing a socket with
+        # unread bytes makes Windows reset the connection before the client reads the reply.
+        status, content = self.request(
+            "/api/upload", headers={"Content-Length": "invalid"}, method="POST"
+        )
         self.assertEqual(status, 400)
         self.assertIn("error", json.loads(content))
 
     def test_oversized_request_is_rejected_before_reading(self):
+        # No body: if the server tried to read the declared length, this request would time out.
         status, content = self.request(
-            "/api/upload", "{}", {"Content-Length": str(MAX_PDF_BYTES * 2 + 1)}
+            "/api/upload", headers={"Content-Length": str(MAX_PDF_BYTES * 2 + 1)}, method="POST"
         )
         self.assertEqual(status, 413)
         self.assertIn("error", json.loads(content))
