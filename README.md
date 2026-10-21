@@ -270,8 +270,8 @@ model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
 |---|---|
 | `GET /` | Serve the study interface |
 | `GET /health` | Return `{"status":"ok"}` without calling external services |
-| `GET /api/documents` | List current and restored documents from the configured storage directory |
-| `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID and passage count |
+| `GET /api/documents` | List current and restored documents (ID, name, passage count, and status) from the configured storage directory |
+| `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID, passage count, and status |
 | `POST /api/ask` | Accept `document_id` and `question`; return answer and source passages |
 | `POST /api/quiz` | Accept `document_id`; return five questions with options and source IDs |
 
@@ -283,8 +283,11 @@ and model failures return 503.
 
 This is a development baseline. Documents are shared within one server instance
 and persist in its configured storage directory; scores live in browser local
-storage. The new upload page and document processing status (SCRUM-63,
-SCRUM-65) are not merged yet; the existing page lists documents after an upload.
+storage. When the page opens it lists the documents uploaded from that browser
+(Ready). An upload in progress shows Processing, and a failed upload shows Failed
+with the reason until the page is reloaded. The page checks the file type and
+the 12 MB limit before uploading. The API itself is not limited to one student
+until accounts are added (SCRUM-116, PBI 20).
 There is no login, per-student isolation, database, OCR, or OneDrive/Canvas
 import yet. The app has embedding search and keeps the existing cloze quiz
 rather than claiming all team prototypes are merged.

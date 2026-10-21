@@ -71,8 +71,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "ok"})
         elif path == "/api/documents":
             with self.server.document_lock:
+                # Text is extracted during upload, so every stored document is ready to use.
                 documents = [
-                    {"id": key, "name": name, "passages": len(passages)}
+                    {"id": key, "name": name, "passages": len(passages), "status": "ready"}
                     for key, (name, passages) in self.server.documents.items()
                 ]
             self._json(200, {"documents": documents})
@@ -114,7 +115,15 @@ class Handler(BaseHTTPRequestHandler):
                 except RuntimeError:
                     # The upload is saved; the first question indexes the document again.
                     self.log_error("Could not index document %s for search", document_id)
-                self._json(200, {"id": document_id, "name": name, "passages": len(passages)})
+                self._json(
+                    200,
+                    {
+                        "id": document_id,
+                        "name": name,
+                        "passages": len(passages),
+                        "status": "ready",
+                    },
+                )
                 return
             document_id = self._string(payload, "document_id", 64)
             with self.server.document_lock:
