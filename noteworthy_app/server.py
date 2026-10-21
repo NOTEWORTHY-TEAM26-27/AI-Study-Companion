@@ -11,9 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .core import build_prompt, extract_passages, retrieve
+from .core import build_prompt, extract_passages
 from .models import generate_answer
 from .quiz import generate_quiz
+from .search import EmbeddingSearch, KeywordSearch, create_search
 from .storage import load_documents, save_document
 
 STATIC = Path(__file__).parent / "static" / "index.html"
@@ -25,12 +26,17 @@ class StudyServer(ThreadingHTTPServer):
     """Serve documents from one storage directory with an in-memory lookup."""
 
     def __init__(
-        self, address: tuple[str, int], answer_generator: Callable[[str], str], data_dir: Path
+        self,
+        address: tuple[str, int],
+        answer_generator: Callable[[str], str],
+        data_dir: Path,
+        search: KeywordSearch | EmbeddingSearch,
     ):
         self.data_dir = data_dir
         self.documents = load_documents(data_dir)
         self.document_lock = threading.Lock()
         self.answer_generator = answer_generator
+        self.search = search
         super().__init__(address, Handler)
 
 
@@ -104,6 +110,11 @@ class Handler(BaseHTTPRequestHandler):
                 with self.server.document_lock:
                     document_id = save_document(self.server.data_dir, name, pdf, passages)
                     self.server.documents[document_id] = (name, passages)
+                try:
+                    self.server.search.index(document_id, passages)
+                except RuntimeError:
+                    # The upload is saved; the first question indexes the document again.
+                    self.log_error("Could not index document %s for search", document_id)
                 self._json(
                     200,
                     {
@@ -125,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"questions": generate_quiz(passages)})
                 return
             question = self._string(payload, "question", 1000)
-            matches = retrieve(passages, question)
+            matches = self.server.search.retrieve(document_id, passages, question)
             if not matches:
                 self._json(200, {"answer": "The PDF does not say.", "sources": []})
                 return
@@ -155,11 +166,17 @@ def create_server(
     *,
     answer_generator: Callable[[str], str] = generate_answer,
     data_dir: str | Path | None = None,
+    search: KeywordSearch | EmbeddingSearch | None = None,
 ) -> StudyServer:
     directory = Path(
         data_dir if data_dir is not None else os.environ.get("DOCUMENTS_DIR", "data/documents")
     )
-    return StudyServer((host, port), answer_generator, directory)
+    return StudyServer(
+        (host, port),
+        answer_generator,
+        directory,
+        search if search is not None else create_search(),
+    )
 
 
 def main() -> None:
