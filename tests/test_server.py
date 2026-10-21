@@ -1,17 +1,22 @@
 import base64
 import http.client
 import json
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from noteworthy_app.search import EmbeddingSearch
 from noteworthy_app.server import MAX_PDF_BYTES, create_server
 from tests.fixtures import study_pdf
 
 
 class ServerTests(unittest.TestCase):
     def setUp(self):
+        # Keyword search unless a test sets one; never load the real search model.
+        self.enterContext(mock.patch.dict(os.environ, {"RETRIEVAL": "keyword"}))
         self.prompts = []
         self.storage = tempfile.TemporaryDirectory()
         self.addCleanup(self.storage.cleanup)
@@ -154,6 +159,66 @@ class ServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 503)
         self.assertIn("unavailable", result["error"])
+
+    def test_embedding_search_answers_questions_without_shared_words(self):
+        calls = []
+
+        def embed(texts):
+            calls.append(texts)
+            return [
+                [1.0, 0.0] if "hotosynthesis" in t or "leaves" in t else [0.0, 1.0] for t in texts
+            ]
+
+        answer_generator = self.server.answer_generator
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.server = create_server(
+            "127.0.0.1",
+            0,
+            answer_generator=answer_generator,
+            data_dir=self.data_dir,
+            search=EmbeddingSearch(embed),
+        )
+        self.thread = threading.Thread(
+            target=lambda: self.server.serve_forever(poll_interval=0.01), daemon=True
+        )
+        self.thread.start()
+        document_id = self.upload()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.upload(), document_id)
+        self.assertEqual(len(calls), 1)
+        status, result = self.post(
+            "/api/ask", {"document_id": document_id, "question": "What makes green leaves work?"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual([source["id"] for source in result["sources"]], ["p1-1"])
+        self.assertEqual(len(self.prompts), 1)
+        self.assertEqual(calls[1:], [["What makes green leaves work?"]])
+        status, result = self.post(
+            "/api/ask", {"document_id": document_id, "question": "quantum gravity"}
+        )
+        self.assertEqual(result, {"answer": "The PDF does not say.", "sources": []})
+        self.assertEqual(len(self.prompts), 1)
+
+    def test_upload_is_saved_when_search_model_fails(self):
+        def broken(texts):
+            raise OSError("model files missing")
+
+        self.server.search = EmbeddingSearch(broken)
+        document_id = self.upload()
+        self.assertIn(document_id, self.server.documents)
+        status, result = self.post(
+            "/api/ask", {"document_id": document_id, "question": "Photosynthesis"}
+        )
+        self.assertEqual(status, 503)
+        self.assertIn("search model is unavailable", result["error"])
+        self.assertEqual(self.prompts, [])
+
+    def test_unknown_retrieval_setting_stops_startup(self):
+        with mock.patch.dict(os.environ, {"RETRIEVAL": "vector"}):
+            with self.assertRaisesRegex(ValueError, "Unsupported RETRIEVAL"):
+                create_server("127.0.0.1", 0, data_dir=self.data_dir)
 
     def test_documents_are_scoped_to_storage_directory(self):
         self.upload()
