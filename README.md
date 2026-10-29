@@ -264,7 +264,8 @@ outside the source checkout. Runtime dependencies are pinned in
 The server accepts an answer generator through `create_server(...)`, so the
 model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
 `AI_PROVIDER`: `ollama` (default, local) or `digitalocean` (serverless inference,
-`DIGITALOCEAN_API_KEY`, optional `DIGITALOCEAN_BASE_URL` and `DIGITALOCEAN_MODEL`).
+`DIGITALOCEAN_API_KEY`, optional `DIGITALOCEAN_BASE_URL`, `DIGITALOCEAN_MODEL`,
+`DIGITALOCEAN_MAX_TOKENS`, `DIGITALOCEAN_TEMPERATURE` and `DIGITALOCEAN_REASONING_EFFORT`).
 
 | Route | Behavior |
 |---|---|

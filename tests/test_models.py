@@ -152,24 +152,17 @@ class ModelTests(unittest.TestCase):
             {"choices": [{"message": {"content": " Hosted answer. "}}]}
         ).encode()
 
-        endpoint = f"http://127.0.0.1:{self.server.server_port}/v1"
-
-        with patch.dict(
-            os.environ,
-            {
-                "AI_PROVIDER": "digitalocean",
-                "DIGITALOCEAN_API_KEY": "fake-test-key",
-                "DIGITALOCEAN_BASE_URL": endpoint,
-                "DIGITALOCEAN_MODEL": "llama-4-maverick",
-            },
-        ):
+        with self._digitalocean_environment(DIGITALOCEAN_MODEL="openai-gpt-oss-120b"):
             answer = generate_answer("Explain Scrum.")
 
         self.assertEqual(answer, "Hosted answer.")
         self.assertEqual(
             self.requests[0]["model"],
-            "llama-4-maverick",
+            "openai-gpt-oss-120b",
         )
+        self.assertEqual(self.requests[0]["max_completion_tokens"], 4096)
+        self.assertNotIn("temperature", self.requests[0])
+        self.assertEqual(self.requests[0]["reasoning_effort"], "low")
         self.assertEqual(
             self.requests[0]["messages"],
             [
@@ -189,19 +182,154 @@ class ModelTests(unittest.TestCase):
             "Bearer fake-test-key",
         )
 
-    def test_digitalocean_requires_api_key(self):
-        with patch.dict(
-            os.environ,
-            {
-                "AI_PROVIDER": "digitalocean",
-                "DIGITALOCEAN_API_KEY": "",
-            },
+    def _digitalocean_environment(self, **settings):
+        environment = {
+            "AI_PROVIDER": "digitalocean",
+            "DIGITALOCEAN_API_KEY": "fake-test-key",
+            "DIGITALOCEAN_BASE_URL": f"http://127.0.0.1:{self.server.server_port}/v1",
+            # Empty values count as unset, so settings exported from .env do not leak in.
+            "DIGITALOCEAN_MODEL": "",
+            "DIGITALOCEAN_MAX_TOKENS": "",
+            "DIGITALOCEAN_TEMPERATURE": "",
+            "DIGITALOCEAN_REASONING_EFFORT": "",
+        }
+        environment.update(settings)
+        return patch.dict(os.environ, environment)
+
+    def test_digitalocean_default_model(self):
+        self.response_body = json.dumps(
+            {"choices": [{"message": {"content": "Hosted answer."}}]}
+        ).encode()
+
+        with self._digitalocean_environment(DIGITALOCEAN_MODEL="  "):
+            generate_answer("Explain Scrum.")
+
+        self.assertEqual(self.requests[0]["model"], "openai-gpt-oss-120b")
+        self.assertEqual(self.requests[0]["reasoning_effort"], "low")
+
+    def test_digitalocean_gpt_oss_models_reason_briefly(self):
+        self.response_body = json.dumps(
+            {"choices": [{"message": {"content": "Hosted answer."}}]}
+        ).encode()
+
+        for model in ["openai-gpt-oss-120b", "openai-gpt-oss-20b"]:
+            with self.subTest(model=model):
+                self.requests.clear()
+                with self._digitalocean_environment(DIGITALOCEAN_MODEL=model):
+                    generate_answer("Explain Scrum.")
+
+                self.assertEqual(self.requests[0]["reasoning_effort"], "low")
+
+    def test_digitalocean_key_with_windows_line_ending(self):
+        self.response_body = json.dumps(
+            {"choices": [{"message": {"content": "Hosted answer."}}]}
+        ).encode()
+
+        with self._digitalocean_environment(DIGITALOCEAN_API_KEY="fake-test-key\r"):
+            generate_answer("Explain Scrum.")
+
+        self.assertEqual(self.authorization_headers[0], "Bearer fake-test-key")
+
+    def test_digitalocean_other_models_skip_reasoning_effort(self):
+        self.response_body = json.dumps(
+            {"choices": [{"message": {"content": "Hosted answer."}}]}
+        ).encode()
+
+        with self._digitalocean_environment(DIGITALOCEAN_MODEL="test-model"):
+            generate_answer("Explain Scrum.")
+
+        self.assertEqual(self.requests[0]["model"], "test-model")
+        self.assertNotIn("reasoning_effort", self.requests[0])
+
+    def test_digitalocean_optional_settings(self):
+        self.response_body = json.dumps(
+            {"choices": [{"message": {"content": "Hosted answer."}}]}
+        ).encode()
+
+        with self._digitalocean_environment(
+            DIGITALOCEAN_MAX_TOKENS="2048",
+            DIGITALOCEAN_TEMPERATURE="0",
+            DIGITALOCEAN_REASONING_EFFORT="medium",
         ):
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "DIGITALOCEAN_API_KEY",
-            ):
-                generate_answer("Test question")
+            generate_answer("Explain Scrum.")
+
+        self.assertEqual(self.requests[0]["max_completion_tokens"], 2048)
+        self.assertEqual(self.requests[0]["temperature"], 0.0)
+        self.assertEqual(self.requests[0]["reasoning_effort"], "medium")
+
+    def test_digitalocean_invalid_settings_are_rejected(self):
+        for name, value in [
+            ("DIGITALOCEAN_TEMPERATURE", "low"),
+            ("DIGITALOCEAN_TEMPERATURE", "nan"),
+            ("DIGITALOCEAN_MAX_TOKENS", "many"),
+            ("DIGITALOCEAN_MAX_TOKENS", "0"),
+        ]:
+            with self.subTest(name=name, value=value):
+                with self._digitalocean_environment(**{name: value}):
+                    with self.assertRaisesRegex(RuntimeError, name):
+                        generate_answer("Explain Scrum.")
+
+        self.assertEqual(self.requests, [])
+
+    def test_digitalocean_cut_off_answer_says_so(self):
+        # The later cases are gpt-oss spending the whole limit on reasoning.
+        for message in [{"content": "Half an ans"}, {"content": None}, {}, None]:
+            with self.subTest(message=message):
+                self.response_body = json.dumps(
+                    {"choices": [{"message": message, "finish_reason": "length"}]}
+                ).encode()
+
+                with self._digitalocean_environment():
+                    with self.assertRaisesRegex(RuntimeError, "cut off"):
+                        generate_answer("Explain Scrum.")
+
+    def test_digitalocean_malformed_responses_are_unavailable(self):
+        bodies = [
+            b"not json",
+            b"null",
+            b"{}",
+            b'{"choices":"x"}',
+            b'{"choices":[]}',
+            b'{"choices":[null]}',
+            b'{"choices":[{"message":null}]}',
+            b'{"choices":[{"message":{"content":" "}}]}',
+            b"[" * 100000,
+        ]
+        for body in bodies:
+            self.response_body = body
+
+            with self.subTest(body=body[:40]):
+                with self._digitalocean_environment():
+                    with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                        generate_answer("Explain Scrum.")
+
+        # Every case reached the fake server, so each failure came from the reply.
+        self.assertEqual(len(self.requests), len(bodies))
+
+    def test_digitalocean_http_error_shows_status(self):
+        self.response_status = 404
+        self.response_body = b'{"error": "model_not_found"}'
+
+        with self._digitalocean_environment():
+            with self.assertRaisesRegex(RuntimeError, r"unavailable \(HTTP 404\)") as caught:
+                generate_answer("Explain Scrum.")
+
+        self.assertNotIn("fake-test-key", str(caught.exception))
+
+    def test_digitalocean_bad_base_url_is_unavailable(self):
+        with self._digitalocean_environment(DIGITALOCEAN_BASE_URL="inference.do-ai.run/v1"):
+            with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                generate_answer("Explain Scrum.")
+
+    def test_digitalocean_requires_api_key(self):
+        for api_key in ["", "   "]:
+            with self.subTest(api_key=api_key):
+                with self._digitalocean_environment(DIGITALOCEAN_API_KEY=api_key):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "DIGITALOCEAN_API_KEY",
+                    ):
+                        generate_answer("Test question")
 
         self.assertEqual(self.requests, [])
 
@@ -215,7 +343,21 @@ class ModelTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 RuntimeError,
                 "Unsupported AI_PROVIDER",
-            ):
+            ) as caught:
                 generate_answer("Test question")
 
+        self.assertNotIn("invalid-provider", str(caught.exception))
         self.assertEqual(self.requests, [])
+
+    def test_empty_provider_uses_ollama(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AI_PROVIDER": " ",
+                "OLLAMA_URL": (f"http://127.0.0.1:{self.server.server_port}/api/generate"),
+            },
+        ):
+            answer = generate_answer("Test question")
+
+        self.assertEqual(answer, "A cited answer [p1-1].")
+        self.assertEqual(self.request_paths[0], "/api/generate")
