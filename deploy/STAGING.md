@@ -88,18 +88,22 @@ Uploaded documents live in the `documents` Docker volume and survive redeploys.
 
 ## Model answers on staging
 
-Staging uses DigitalOcean serverless inference (`AI_PROVIDER=digitalocean`, model `anthropic-claude-5.5-haiku`
-by default). Each answer uses prepaid credit. If `DIGITALOCEAN_API_KEY` is empty, answers return 503 and
-upload and quiz still work.
+Staging uses DigitalOcean serverless inference (`AI_PROVIDER=digitalocean`, model `openai-gpt-oss-120b`
+by default, with low reasoning effort). Each answer uses prepaid credit. If `DIGITALOCEAN_API_KEY` is
+empty, answers return 503 and upload and quiz still work.
 
 The model access key must include the model in use, and a key's models cannot be changed after it is
-created. Create the key with both `anthropic-claude-5.5-haiku` and the backup `openai-gpt-oss-120b`.
-To use the backup, add these lines to `.env` and run the deploy script:
+created. Create the key with `openai-gpt-oss-120b`, `nemotron-3-ultra-550b` and `gemma-4-31B-it`.
+To use another of them, set this line in `.env` (replace it if it is already there), remove any
+`DIGITALOCEAN_REASONING_EFFORT` line, and run the deploy script:
 
 ```bash
-DIGITALOCEAN_MODEL=openai-gpt-oss-120b
-DIGITALOCEAN_REASONING_EFFORT=low
+DIGITALOCEAN_MODEL=nemotron-3-ultra-550b
 ```
 
+Anthropic models, and OpenAI models other than gpt-oss, need account Tier 3 or higher.
+
 A 503 answer names the HTTP status from DigitalOcean, for example `(HTTP 401)` when the key does not
-include the model.
+include the model or `(HTTP 403)` when the account tier does not allow it. A 503 that says the answer
+was cut off means the reply used the whole limit (`DIGITALOCEAN_MAX_TOKENS`, default 4,096; gpt-oss counts
+its reasoning in it).

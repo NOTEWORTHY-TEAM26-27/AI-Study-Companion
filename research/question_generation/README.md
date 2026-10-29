@@ -54,5 +54,5 @@ Tested on three lecture PDFs from different courses:
 ## Next steps
 
 - Check the questions for factual accuracy and quality, not only format.
-- Try a larger model (Claude Haiku 5.5 on DigitalOcean) and compare.
+- Try a larger model (gpt-oss-120b on DigitalOcean) and compare.
 - Move the generator into the app behind the shared model client (12-5, Sprint 3).
