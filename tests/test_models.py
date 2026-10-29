@@ -152,24 +152,17 @@ class ModelTests(unittest.TestCase):
             {"choices": [{"message": {"content": " Hosted answer. "}}]}
         ).encode()
 
-        endpoint = f"http://127.0.0.1:{self.server.server_port}/v1"
-
-        with patch.dict(
-            os.environ,
-            {
-                "AI_PROVIDER": "digitalocean",
-                "DIGITALOCEAN_API_KEY": "fake-test-key",
-                "DIGITALOCEAN_BASE_URL": endpoint,
-                "DIGITALOCEAN_MODEL": "llama-4-maverick",
-            },
-        ):
+        with self._digitalocean_environment(DIGITALOCEAN_MODEL="openai-gpt-oss-120b"):
             answer = generate_answer("Explain Scrum.")
 
         self.assertEqual(answer, "Hosted answer.")
         self.assertEqual(
             self.requests[0]["model"],
-            "llama-4-maverick",
+            "openai-gpt-oss-120b",
         )
+        self.assertEqual(self.requests[0]["max_completion_tokens"], 4096)
+        self.assertNotIn("temperature", self.requests[0])
+        self.assertNotIn("reasoning_effort", self.requests[0])
         self.assertEqual(
             self.requests[0]["messages"],
             [
@@ -188,6 +181,81 @@ class ModelTests(unittest.TestCase):
             self.authorization_headers[0],
             "Bearer fake-test-key",
         )
+
+    def _digitalocean_environment(self, **settings):
+        environment = {
+            "AI_PROVIDER": "digitalocean",
+            "DIGITALOCEAN_API_KEY": "fake-test-key",
+            "DIGITALOCEAN_BASE_URL": f"http://127.0.0.1:{self.server.server_port}/v1",
+            # Empty values count as unset, so settings exported from .env do not leak in.
+            "DIGITALOCEAN_MAX_TOKENS": "",
+            "DIGITALOCEAN_TEMPERATURE": "",
+            "DIGITALOCEAN_REASONING_EFFORT": "",
+        }
+        environment.update(settings)
+        return patch.dict(os.environ, environment)
+
+    def test_digitalocean_default_model(self):
+        self.response_body = json.dumps(
+            {"choices": [{"message": {"content": "Hosted answer."}}]}
+        ).encode()
+
+        with self._digitalocean_environment():
+            os.environ.pop("DIGITALOCEAN_MODEL", None)
+            generate_answer("Explain Scrum.")
+
+        self.assertEqual(self.requests[0]["model"], "anthropic-claude-5.5-haiku")
+
+    def test_digitalocean_optional_settings(self):
+        self.response_body = json.dumps(
+            {"choices": [{"message": {"content": "Hosted answer."}}]}
+        ).encode()
+
+        with self._digitalocean_environment(
+            DIGITALOCEAN_MAX_TOKENS="2048",
+            DIGITALOCEAN_TEMPERATURE="0",
+            DIGITALOCEAN_REASONING_EFFORT="low",
+        ):
+            generate_answer("Explain Scrum.")
+
+        self.assertEqual(self.requests[0]["max_completion_tokens"], 2048)
+        self.assertEqual(self.requests[0]["temperature"], 0.0)
+        self.assertEqual(self.requests[0]["reasoning_effort"], "low")
+
+    def test_digitalocean_invalid_settings_are_rejected(self):
+        for name, value in [
+            ("DIGITALOCEAN_TEMPERATURE", "low"),
+            ("DIGITALOCEAN_MAX_TOKENS", "many"),
+            ("DIGITALOCEAN_MAX_TOKENS", "0"),
+        ]:
+            with self.subTest(name=name, value=value):
+                with self._digitalocean_environment(**{name: value}):
+                    with self.assertRaisesRegex(RuntimeError, name):
+                        generate_answer("Explain Scrum.")
+
+        self.assertEqual(self.requests, [])
+
+    def test_digitalocean_cut_off_answer_is_unavailable(self):
+        self.response_body = json.dumps(
+            {"choices": [{"message": {"content": "Half an ans"}, "finish_reason": "length"}]}
+        ).encode()
+
+        with self._digitalocean_environment():
+            with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                generate_answer("Explain Scrum.")
+
+    def test_digitalocean_http_error_shows_status(self):
+        self.response_status = 404
+        self.response_body = b'{"error": "model_not_found"}'
+
+        with self._digitalocean_environment():
+            with self.assertRaisesRegex(RuntimeError, r"unavailable \(HTTP 404\)"):
+                generate_answer("Explain Scrum.")
+
+    def test_digitalocean_bad_base_url_is_unavailable(self):
+        with self._digitalocean_environment(DIGITALOCEAN_BASE_URL="inference.do-ai.run/v1"):
+            with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                generate_answer("Explain Scrum.")
 
     def test_digitalocean_requires_api_key(self):
         with patch.dict(

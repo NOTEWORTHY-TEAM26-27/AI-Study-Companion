@@ -88,6 +88,18 @@ Uploaded documents live in the `documents` Docker volume and survive redeploys.
 
 ## Model answers on staging
 
-Staging uses DigitalOcean serverless inference (`AI_PROVIDER=digitalocean`, model `llama-4-maverick` by
-default). Each answer uses prepaid credit. If `DIGITALOCEAN_API_KEY` is empty, answers return 503 and
+Staging uses DigitalOcean serverless inference (`AI_PROVIDER=digitalocean`, model `anthropic-claude-5.5-haiku`
+by default). Each answer uses prepaid credit. If `DIGITALOCEAN_API_KEY` is empty, answers return 503 and
 upload and quiz still work.
+
+The model access key must include the model in use, and a key's models cannot be changed after it is
+created. Create the key with both `anthropic-claude-5.5-haiku` and the backup `openai-gpt-oss-120b`.
+To use the backup, add these lines to `.env` and run the deploy script:
+
+```bash
+DIGITALOCEAN_MODEL=openai-gpt-oss-120b
+DIGITALOCEAN_REASONING_EFFORT=low
+```
+
+A 503 answer names the HTTP status from DigitalOcean, for example `(HTTP 401)` when the key does not
+include the model.
