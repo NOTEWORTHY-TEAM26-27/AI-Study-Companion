@@ -284,7 +284,7 @@ class ModelTests(unittest.TestCase):
                         generate_answer("Explain Scrum.")
 
     def test_digitalocean_malformed_responses_are_unavailable(self):
-        for body in [
+        bodies = [
             b"not json",
             b"null",
             b"{}",
@@ -293,13 +293,18 @@ class ModelTests(unittest.TestCase):
             b'{"choices":[null]}',
             b'{"choices":[{"message":null}]}',
             b'{"choices":[{"message":{"content":" "}}]}',
-        ]:
+            b"[" * 100000,
+        ]
+        for body in bodies:
             self.response_body = body
 
-            with self.subTest(body=body):
+            with self.subTest(body=body[:40]):
                 with self._digitalocean_environment():
                     with self.assertRaisesRegex(RuntimeError, "unavailable"):
                         generate_answer("Explain Scrum.")
+
+        # Every case reached the fake server, so each failure came from the reply.
+        self.assertEqual(len(self.requests), len(bodies))
 
     def test_digitalocean_http_error_shows_status(self):
         self.response_status = 404
