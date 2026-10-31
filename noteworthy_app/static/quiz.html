@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quiz Title · AI study companion</title>
+<style>
+    :root { 
+    color-scheme: light; 
+    font: 16px/1.5 system-ui, sans-serif;
+    background: #fff;
+    color: #000; 
+    --progress-color: #00ffbf;
+    --track-color: #e6e6e6;
+    }
+    body { max-width: 1020px; margin: 0 auto; padding: 32px 18px 70px; }
+    header { border-bottom: 1px solid #000; margin-bottom: 28px; }
+    h1 { font-size: 2rem; margin: 0 0 8px; }
+    h2 { font-size: 1.15rem; margin-top: 0; }
+    .eyebrow { color: #555; font-size: .8rem; text-transform: uppercase; letter-spacing: .1em; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    section { border: 1px solid #000; padding: 18px; }
+    label { display: block; font-weight: 600; margin-bottom: 8px; }
+    input, button { font: inherit; }
+    input[type=text] { box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid #000; }
+    input[type=file] { max-width: 100%; }
+    button { border: 1px solid #000; background: #000; color: #fff; padding: 8px 14px; cursor: pointer; margin-top: 12px; }
+    button:disabled { background: #fff; color: #888; border-color: #888; cursor: default; }
+    .muted { color: #555; }
+    #answer { white-space: pre-wrap; }
+    .source { padding: 12px 0; border-top: 1px solid #ccc; }
+    #status { min-height: 1.5em; }
+    .quiz-question { border-top: 1px solid #ccc; padding: 16px 0; }
+    .quiz-question label { font-weight: 400; margin: 6px 0; }
+    .scorebar { margin: 10px 0; }
+    .scorebar span { display: block; height: 8px; background: #000; }
+    .document { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid #ccc; }
+    .document span { min-width: 0; overflow-wrap: anywhere; }
+    .document button { margin-top: 0; padding: 4px 10px; }
+
+    button:hover { background: #4f4f4f; }
+
+    .score-container {
+      position: relative;
+      width: 160px;
+      height: 160px;
+    }
+
+    .radial-progress-container svg {
+      transform: rotate(-90deg);
+      width: 100%;
+      height: 100%;
+    }
+
+    .progress-track {
+      fill: none;
+      stroke: var(--track-color);
+      stroke-width: 12px;
+    }
+
+    .progress-bar {
+      fill: none;
+      stroke: var(--progress-color);
+      stroke-width: 12px;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 0.3s ease;
+    }
+
+    .progress-text {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 24px;
+      font-weight: bold;
+      color: var(--text-color);
+    }
+
+    score-section {
+         border: 1px solid #000; 
+         padding: 18px; 
+         display: flex;
+
+    }
+
+</style>
+<section id="quiz-test" !hidden>
+    <p>How will you conduct this quiz?</p>
+    <button id="test">Offline test</button>
+    <button id="uploads">Use Uploads</button>
+</section>
+<section id="quiz-format" hidden>
+    <p>How do you want the questions to show?</p>
+    <button id="one-only">One at a time</button>
+    <button id="all">All at once</button>
+</section>
+
+<div id="results">
+</div>
+
+<div id="quiz">
+</div>
+
+<label id="test-print"></label>
+
+<script>
+    let quizMode = 3;
+    let questionMode = 3;
+    let currentQuestion = 0;
+    let totalQuestions = 0;
+
+    const quizTest = document.getElementById("quiz-test");
+    const quizFormat = document.getElementById("quiz-format");
+    const offlineTest = document.getElementById("test");
+    const useUploads = document.getElementById("uploads");
+    const oneAtTime = document.getElementById("one-only");
+    const allAtOnce = document.getElementById("all");
+    const testPrint = document.getElementById("test-print");
+    const quizBubble = document.getElementById("quiz");
+
+    const QUESTION_TYPE = Object.freeze({MULTI: "MULTI", BLANK: "BLANK", TRUEFALSE: "TRUEFALSE", SHORT: "SHORT"});
+
+    /* Test questions for each format. */
+
+    const testQuestion1 = {
+        question: "Mitochondria is the ______ of the cell.",
+        options: [],
+        answer_index: 2,
+        source_id: 3,
+        page: 18,
+        topic: "Cells",
+        source_text: "1_Introduction.pdf",
+        question_type: QUESTION_TYPE.BLANK
+    };
+    const testQuestion2 = {
+        question: "When you multiply 2 by by how many total fingers you have, what number do you get?",
+        options: ["10", "5", "20", "12"],
+        answer_index: 2,
+        source_id: 3,
+        page: 4,
+        topic: "Math - Word problems",
+        source_text: "Lecture2_3.pdf",
+        question_type: QUESTION_TYPE.MULTI
+    };
+    const testQuestion3 = {
+        question: "The sky is blue, right?",
+        options: [],
+        answer_index: 0,
+        source_id: 3,
+        page: 3,
+        topic: "Philosophy",
+        source_text: "MathBook.pdf",
+        question_type: QUESTION_TYPE.TRUEFALSE
+    };
+    const testQuestion4 = {
+        question: "Explain what why means.",
+        options: [],
+        answer_index: 2,
+        source_id: 3,
+        page: 15,
+        topic: "Definitions",
+        source_text: "EnglishBook.pdf",
+        question_type: QUESTION_TYPE.SHORT
+    };
+
+    /* Only the offline test works in this build. */
+
+    offlineTest.addEventListener ( 'click', () => {
+        quizMode = 0;
+        quizTest.hidden = quizFormat.hidden;
+        quizFormat.hidden = !quizFormat.hidden;
+    });
+    useUploads.addEventListener ('click', () => {
+        quizMode = 1;
+        quizTest.hidden = quizFormat.hidden;
+        quizFormat.hidden = !quizFormat.hidden;
+    });
+    oneAtTime.addEventListener ('click', () => {
+        questionMode = 0;
+        quizFormat.hidden = !quizFormat.hidden;
+        generateQuestions();
+    });
+    allAtOnce.addEventListener ('click', () => {
+        questionMode = 1;
+        quizFormat.hidden = !quizFormat.hidden;
+        generateQuestions();
+    });
+
+    function generateQuestions() {
+        if (quizMode == 0) {
+            offlineGenerateQuestions();
+        } else {
+            offlineGenerateQuestions();
+            //uploadGenerateQuestions()
+        }
+    };
+
+    function fillInTheBlank (block) {
+        const textbox = document.createElement('input');
+        textbox.type = 'text';
+        block.append(textbox);
+        return;
+    };
+
+    function multiChoice (block, options, qNum) {
+        let num = 0;
+        options.forEach(option => {
+            let label = document.createElement('label');
+            let radio = document.createElement('input'); 
+            radio.type = 'radio';
+            radio.name = `q${qNum}`;
+            radio.value = num;
+            label.append(radio, option);
+            block.append(label);
+            num++;
+        });
+        return;
+    };
+
+    function shortAnswer (block) {
+        let label = document.createElement('label');
+        const textbox = document.createElement('textarea');
+        textbox.cols="80";
+        textbox.rows="10";
+        label.append(textbox)
+        block.append(label);
+        return;
+    };
+
+    function offlineGenerateQuestions() {
+        let questionList = [testQuestion1, testQuestion2, testQuestion3, testQuestion4];
+        try {
+            const container = quizBubble;
+            container.replaceChildren();
+            questionList.forEach(question => {
+                const block = document.createElement('div');
+                block.className = 'quiz-question';
+                const title = document.createElement('strong');
+                block.id = `qu${questionList.indexOf(question)}`;
+                title.textContent = (questionList.indexOf(question) + 1) + ". " + question.question;
+                block.append(title);
+                if (questionMode == 0) { 
+                    block.hidden = !block.hidden;
+                    if (questionList.indexOf(question) == 0) {block.hidden = !block.hidden;}
+                }
+
+                switch (question.question_type) {
+                    case QUESTION_TYPE.BLANK:
+                        fillInTheBlank(block);
+                        break;
+                    case QUESTION_TYPE.MULTI:
+                        multiChoice(block, question.options, questionList.indexOf(question));
+                        break;
+                    case QUESTION_TYPE.SHORT:
+                        shortAnswer(block);
+                        break;
+                    case QUESTION_TYPE.TRUEFALSE:
+                        multiChoice(block, ["True", "False"], questionList.indexOf(question));
+                        break;
+                }
+                container.append(block);
+                totalQuestions++;
+            });
+
+            const submit = document.createElement('button');
+            submit.textContent = 'Submit';
+
+            if (questionMode == 0) {
+                submit.hidden = !submit.hidden;
+                const previous = document.createElement('button');
+                const next = document.createElement('button');
+                previous.textContent = 'Previous';
+                next.textContent = 'Next';
+
+                previous.onclick = () => {
+                    if (currentQuestion == totalQuestions - 1) { 
+                        next.hidden = !next.hidden;
+                        submit.hidden = !submit.hidden;
+                    }
+                    currentQuestion--;
+                    if (currentQuestion == 0) { 
+                        previous.hidden = !previous.hidden;
+                    }
+                    const pQuestion = document.getElementById(`qu${currentQuestion}`);
+                    const nQuestion = document.getElementById(`qu${currentQuestion + 1}`);
+                    pQuestion.hidden = !pQuestion.hidden;
+                    nQuestion.hidden = !nQuestion.hidden;
+
+                }
+                previous.hidden = !previous.hidden;
+                next.onclick = () => {
+                    if (currentQuestion == 0) { previous.hidden = !previous.hidden; }
+                    currentQuestion++;
+                    if (currentQuestion == totalQuestions - 1) { 
+                        next.hidden = !next.hidden;
+                        submit.hidden = !submit.hidden;
+                    }
+                    const pQuestion = document.getElementById(`qu${currentQuestion - 1}`);
+                    const nQuestion = document.getElementById(`qu${currentQuestion}`);
+                    pQuestion.hidden = !pQuestion.hidden;
+                    nQuestion.hidden = !nQuestion.hidden;
+
+                }
+                container.append(previous);
+                container.append(next);
+            }
+
+            submit.onclick = () => {
+                let correct = 0;
+                quizBubble.hidden = !quizBubble.hidden;
+                questionList.forEach(question => { 
+                    let chosen;
+                    let right;
+                    switch (question.question_type) {
+                        case QUESTION_TYPE.BLANK:
+                            break;
+                        case QUESTION_TYPE.MULTI:
+                            chosen = document.querySelector(`input[name=q${questionList.indexOf(question)}]:checked`);
+                            console.log(chosen.value);
+                            right = chosen && Number(chosen.value) === question.answer_index;
+                            if (right) { correct++; }
+                            break;
+                        case QUESTION_TYPE.SHORT:
+                            break;
+                        case QUESTION_TYPE.TRUEFALSE:
+                            chosen = document.querySelector(`input[name=q${questionList.indexOf(question)}]:checked`);
+                            right = chosen && Number(chosen.value) === question.answer_index;
+                            if (right) { correct++; }
+                            break;
+                    }
+                });
+                testPrint.textContent = "Correct: " + correct + " / " + totalQuestions;
+            }
+            container.append(submit);
+
+        } catch (error) {
+            testPrint.textContent = "Error: " + error;
+            return;
+        }
+
+        return;
+    };
+
+    
+    function uploadGenerateQuestions() {
+        return;
+    };
+
+
+</script>

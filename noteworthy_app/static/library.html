@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library · AI study companion</title>
+<style>
+  :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; background: #f5f4f0; color: #16211d; }
+  body { max-width: 1200px; margin: 0 auto; padding: 32px 18px 70px; }
+  header { border-bottom: 1px solid #cad4ca; margin-bottom: 32px; }
+  h1 { font-size: clamp(2rem, 5vw, 3.5rem); margin: 0 0 8px; letter-spacing: -.04em; }
+  h2 { font-size: 1.3rem; margin-top: 0; }
+  .eyebrow { color: #28725b; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; font-size: .75rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+  section { background: white; border: 1px solid #d9dfd8; border-radius: 16px; padding: 22px; box-shadow: 0 5px 20px #1a33210a; }
+  label { display: block; font-weight: 650; margin-bottom: 8px; }
+  input, button { font: inherit; }
+  input[type=text] { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #aebdb1; border-radius: 8px; }
+  input[type=file] { max-width: 100%; }
+  button { border: 0; border-radius: 8px; background: #226d54; color: white; padding: 11px 16px; cursor: pointer; margin-top: 12px; }
+  button:disabled { opacity: .55; cursor: default; }
+  .muted { color: #52635a; }
+  #answer { white-space: pre-wrap; font-size: 1.08rem; }
+  .source { padding: 14px 0; border-top: 1px solid #e2e8e2; }
+  .source strong { color: #226d54; }
+  #status { min-height: 1.5em; }
+  .quiz-question { border-top: 1px solid #e2e8e2; padding: 18px 0; }
+  .quiz-question label { font-weight: 400; margin: 6px 0; }
+  .scorebar { margin: 10px 0; }
+  .scorebar span { display: block; height: 8px; border-radius: 8px; background: #64b596; }
+
+  uploadButton { border: 0; border-radius: 8px; background: #226d54; color: white; padding: 11px 16px; cursor: pointer; margin-top: 12px; }
+  #file-input { display: none; }
+
+  table { width: 100%; }
+  th {border-bottom: 2px solid #000; text-align: left; padding: 10px 8px;}
+  tr[data-href] {cursor: pointer; text-align: left; vertical-align: center; height: 50px;}
+  tr:hover {background-color: #f5f5f5;}
+
+</style>
+
+  <section>
+    <button id="uploadButton">Upload
+      <input type="file" id="file-input">
+    </button>
+
+  </section>
+
+<table id="listing">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Accessed</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr data-href="index.html">
+      <td>Mock Entry</td>
+      <td>10-14-26</td>
+    </tr>
+  </tbody>
+</table>
+
+  <section>
+    <h2>Return to Index</h2>
+    <a href="./index.html" target="_blank">Index</a>
+  </section>
+
+<script>
+  let selectedDocument = null;
+  let currentQuiz = [];
+  const $ = id => document.getElementById(id);
+
+
+  const dropZone = document.getElementById('uploadButton');
+  const fileInput = document.getElementById('file-input');
+
+  dropZone.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) {
+          const uploadedFile = fileInput.files[0];
+          uploadFile(uploadedFile);
+      }
+  });
+  
+  async function api(path, body) {
+    const response = await fetch(path, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  }
+  function renderDocuments(documents) {
+    const list = $('documents'); list.replaceChildren();
+    for (const uploadedDocument of documents) {
+      const item = document.createElement('p');
+      item.textContent = `${uploadedDocument.name} · ${uploadedDocument.passages} passages`;
+      list.append(item);
+    }
+  }
+  function renderToTable(documents) {
+    const tbody = document.querySelector('#listing tbody');
+    tbody.replaceChildren();
+    
+    for (const uploadedDocument of documents) {
+      const newRow = document.createElement('tr');
+      // Temporary location
+      newRow.dataset.href = "https://example.com";
+      
+      newRow.innerHTML = `<td>${uploadedDocument.name}</td>
+        <td>Today</td>`;
+      
+      tbody.appendChild(newRow);
+    }
+  }
+
+  async function uploadFile(file) {
+    if (!file) { 
+      return; 
+    }
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = reject; reader.readAsDataURL(file);
+      });
+      selectedDocument = await api('/api/upload', {name: file.name, data});
+
+      //renderDocuments((await fetch('/api/documents').then(r => r.json())).documents);
+      renderToTable((await fetch('/api/documents').then(r => r.json())).documents);
+    } catch (error) { $('status').textContent = error.message; }
+    finally { $('upload').disabled = false; }
+
+  };
+  
+
+
+</script>
+</html>
