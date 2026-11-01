@@ -94,8 +94,8 @@ empty, answers return 503 and upload and quiz still work.
 
 The model access key must include the model in use, and a key's models cannot be changed after it is
 created. Create the key with `openai-gpt-oss-120b`. To use another model later, create a new key that
-includes it, set `DIGITALOCEAN_MODEL` to that model's ID in `.env`, remove any
-`DIGITALOCEAN_REASONING_EFFORT` line, and run the deploy script.
+includes it, put the new key after `DIGITALOCEAN_API_KEY=` in `.env`, set `DIGITALOCEAN_MODEL` to that
+model's ID, remove any `DIGITALOCEAN_REASONING_EFFORT` line, and run the deploy script.
 
 Anthropic models, and OpenAI models other than gpt-oss, need account Tier 3 or higher.
 
