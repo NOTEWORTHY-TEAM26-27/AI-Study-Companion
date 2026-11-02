@@ -111,6 +111,63 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertIn("error", json.loads(content))
 
+    def test_server_grades_issued_quiz_and_ignores_forged_score_and_key(self):
+        document_id = self.upload()
+        status, quiz = self.post("/api/quiz", {"document_id": document_id})
+        self.assertEqual(status, 200)
+        self.assertIn("quiz_id", quiz)
+        answers = [q["answer_index"] for q in quiz["questions"]]
+        answers[0] = (answers[0] + 1) % 4
+        status, result = self.post(
+            "/api/quiz/submit",
+            {
+                "quiz_id": quiz["quiz_id"],
+                "learner_id": "a" * 32,
+                "answers": answers,
+                "score": 100,
+                "correct": 5,
+                "questions": [],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual((result["correct"], result["total"], result["score"]), (4, 5, 80))
+        status, content = self.request("/api/progress?learner_id=" + "a" * 32)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(content)["attempts"], [result])
+        status, content = self.request("/api/progress?learner_id=" + "b" * 32)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(content)["attempts"], [])
+        self.assertEqual(self.prompts, [])
+
+    def test_quiz_api_reports_invalid_submission_and_unknown_quiz(self):
+        for quiz_id, learner_id, expected in [
+            ("../x", "a" * 32, 400),
+            ("a" * 32, "../../x", 400),
+            ("a" * 32, "b" * 32, 404),
+        ]:
+            status, result = self.post(
+                "/api/quiz/submit", {"quiz_id": quiz_id, "learner_id": learner_id, "answers": []}
+            )
+            self.assertEqual(status, expected)
+            self.assertIn("error", result)
+        status, content = self.request("/api/progress")
+        self.assertEqual(status, 400)
+        self.assertIn("error", json.loads(content))
+
+    def test_failed_quiz_submission_reports_error_and_retry_saves_once(self):
+        _, quiz = self.post("/api/quiz", {"document_id": self.upload()})
+        self.assertIn("quiz_id", quiz)
+        (self.data_dir / "attempts").write_text("blocked")
+        body = {"quiz_id": quiz["quiz_id"], "learner_id": "a" * 32, "answers": [None] * 5}
+        status, result = self.post("/api/quiz/submit", body)
+        self.assertEqual(status, 500)
+        self.assertIn("error", result)
+        (self.data_dir / "attempts").unlink()
+        status, result = self.post("/api/quiz/submit", body)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["correct"], 0)
+        self.assertEqual(self.post("/api/quiz/submit", body), (200, result))
+
     def test_bad_json_and_non_object_payloads(self):
         for body in ["{", "[]", "null", "1"]:
             with self.subTest(body=body):

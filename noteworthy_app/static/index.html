@@ -40,13 +40,21 @@
 <section style="margin-top:18px"><h2>Scores by topic</h2><div id="topicScores"></div></section>
 <script>
   let selectedDocument = null;
-  let currentQuiz = [];
+  let currentQuizId = null;
   let storedDocuments = [];
   let pendingUploads = [];
   let askBusy = false;
   let quizBusy = false;
+  let scoreRequest = 0;
   const MAX_PDF_BYTES = 12 * 1024 * 1024;
   const MY_DOCUMENTS_KEY = 'noteworthy-my-documents';
+  const LEARNER_KEY = 'noteworthy-learner-id';
+  let learnerId;
+  try { learnerId = localStorage.getItem(LEARNER_KEY); } catch (error) { /* storage unavailable */ }
+  if (!/^[0-9a-f]{32}$/.test(learnerId || '')) {
+    learnerId = [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  try { localStorage.setItem(LEARNER_KEY, learnerId); } catch (error) { /* this session only */ }
   const STATUS_LABELS = {processing: 'Processing…', ready: 'Ready', failed: 'Failed'};
   const $ = id => document.getElementById(id);
   async function api(path, body) {
@@ -78,13 +86,14 @@
       // Clear the previous document's answer and quiz so they are not mistaken for this one.
       $('answer').textContent = '';
       $('sources').textContent = 'Sources for the answer appear here.';
-      $('quiz').replaceChildren(); $('quizResult').textContent = ''; currentQuiz = [];
+      $('quiz').replaceChildren(); $('quizResult').textContent = ''; currentQuizId = null;
     }
     selectedDocument = uploadedDocument;
     $('ask').disabled = askBusy;
     $('makeQuiz').disabled = quizBusy;
     $('status').textContent = `Selected: ${uploadedDocument.name}.`;
     renderDocuments(storedDocuments);
+    loadScores(uploadedDocument.id);
   }
   function renderDocuments(documents) {
     storedDocuments = documents;
@@ -170,8 +179,7 @@
     }
     finally { askBusy = false; $('ask').disabled = !selectedDocument; }
   };
-  function showScores() {
-    const scores = JSON.parse(localStorage.getItem('noteworthy-topic-scores') || '{}');
+  function showScores(scores) {
     const container = $('topicScores'); container.replaceChildren();
     const entries = Object.entries(scores);
     if (!entries.length) { container.textContent = 'Complete a quiz to see topic scores.'; return; }
@@ -183,6 +191,18 @@
       row.append(title, bar); container.append(row);
     }
   }
+  async function loadScores(documentId) {
+    const requestId = ++scoreRequest;
+    $('topicScores').textContent = 'Loading saved scores…';
+    try {
+      const response = await fetch(`/api/progress?learner_id=${learnerId}&document_id=${encodeURIComponent(documentId)}`);
+      if (!response.ok) throw new Error('Could not load saved scores.');
+      const progress = await response.json();
+      if (requestId === scoreRequest && selectedDocument && selectedDocument.id === documentId) showScores(progress.topic_scores);
+    } catch (error) {
+      if (requestId === scoreRequest && selectedDocument && selectedDocument.id === documentId) $('topicScores').textContent = 'Could not load saved scores.';
+    }
+  }
   $('makeQuiz').onclick = async () => {
     if (!selectedDocument || quizBusy) return;
     const documentId = selectedDocument.id;
@@ -190,9 +210,10 @@
     try {
       const result = await api('/api/quiz', {document_id: documentId});
       if (!selectedDocument || selectedDocument.id !== documentId) return;
-      currentQuiz = result.questions;
+      currentQuizId = result.quiz_id;
+      const questions = result.questions;
       const container = $('quiz'); container.replaceChildren();
-      currentQuiz.forEach((item, index) => {
+      questions.forEach((item, index) => {
         const block = document.createElement('div'); block.className = 'quiz-question';
         const title = document.createElement('strong'); title.textContent = `${index + 1}. ${item.question}`;
         block.append(title);
@@ -204,22 +225,29 @@
         container.append(block);
       });
       const submit = document.createElement('button'); submit.textContent = 'Submit quiz';
-      submit.onclick = () => {
-        let correct = 0;
-        const scores = JSON.parse(localStorage.getItem('noteworthy-topic-scores') || '{}');
-        currentQuiz.forEach((item, index) => {
+      submit.onclick = async () => {
+        if (quizBusy || submit.disabled || currentQuizId !== result.quiz_id) return;
+        const answers = questions.map((item, index) => {
           const chosen = document.querySelector(`input[name=q${index}]:checked`);
-          const right = chosen && Number(chosen.value) === item.answer_index;
-          if (right) correct++;
-          scores[item.topic] ||= {correct: 0, total: 0};
-          scores[item.topic].total++; if (right) scores[item.topic].correct++;
-          const note = document.createElement('p');
-          note.textContent = `${right ? 'Correct' : `Answer: ${item.options[item.answer_index]}`} · ${item.source_id}, page ${item.page}`;
-          $('quiz').children[index].append(note);
+          return chosen ? Number(chosen.value) : null;
         });
-        localStorage.setItem('noteworthy-topic-scores', JSON.stringify(scores));
-        $('quizResult').textContent = `Score: ${correct} / ${currentQuiz.length}`;
-        submit.disabled = true; showScores();
+        quizBusy = true; submit.disabled = true; $('makeQuiz').disabled = true;
+        $('quizResult').textContent = 'Saving quiz…';
+        try {
+          const graded = await api('/api/quiz/submit', {quiz_id: result.quiz_id, learner_id: learnerId, answers});
+          if (!selectedDocument || selectedDocument.id !== documentId || currentQuizId !== result.quiz_id) return;
+          for (const item of graded.results) {
+            const note = document.createElement('p');
+            note.textContent = `${item.correct ? 'Correct' : `Answer: ${item.expected_answer}`} · ${item.source_id}, page ${item.page}`;
+            container.children[graded.results.indexOf(item)].append(note);
+          }
+          $('quizResult').textContent = `Score: ${graded.correct} / ${graded.total}`;
+          await loadScores(documentId);
+        } catch (error) {
+          if (selectedDocument && selectedDocument.id === documentId && currentQuizId === result.quiz_id) {
+            $('quizResult').textContent = error.message; submit.disabled = false;
+          }
+        } finally { quizBusy = false; $('makeQuiz').disabled = !selectedDocument; }
       };
       container.append(submit); $('quizResult').textContent = '';
     } catch (error) {
@@ -227,7 +255,7 @@
     }
     finally { quizBusy = false; $('makeQuiz').disabled = !selectedDocument; }
   };
-  showScores();
+  showScores({});
   loadDocuments();
 </script>
 </html>
