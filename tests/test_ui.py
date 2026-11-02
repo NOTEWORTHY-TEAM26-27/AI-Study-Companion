@@ -23,7 +23,7 @@ const fs = require('node:fs');
 const pageIds = new Set(JSON.parse(process.env.PAGE_IDS));
 function element() {
   return {
-    children: [], textContent: '', disabled: false,
+    children: [], textContent: '', disabled: false, style: {},
     replaceChildren() { this.children = []; },
     append(...nodes) { this.children.push(...nodes); }
   };
@@ -35,9 +35,12 @@ const server = {
     {id: 'mine1', name: 'stored.pdf', passages: 1, status: 'ready'},
     {id: 'other', name: 'someone-else.pdf', passages: 3, status: 'ready'}
   ],
-  uploadMode: 'ok', uploadGate: null, askGate: null, posts: 0
+  uploadMode: 'ok', uploadGate: null, askGate: null, posts: 0,
+  quizCount: 0, submissions: [], submitFails: false, submitGate: null, progress: {}
 };
+const selectedAnswers = new Map([[0, {value: '1'}]]);
 const context = {
+  crypto: {randomUUID: () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'},
   document: {
     // Like a browser: an id that is not on the page returns null.
     getElementById(id) {
@@ -45,7 +48,8 @@ const context = {
       if (!elements.has(id)) elements.set(id, element());
       return elements.get(id);
     },
-    createElement() { return element(); }
+    createElement() { return element(); },
+    querySelector(selector) { return selectedAnswers.get(Number(selector.match(/q(\d+)/)[1])) || null; }
   },
   localStorage: {
     getItem(key) { return store.has(key) ? store.get(key) : null; },
@@ -59,6 +63,11 @@ const context = {
   },
   async fetch(path, options = {}) {
     if (path === '/api/documents') return {ok: true, json: async () => ({documents: server.documents})};
+    if (path.startsWith('/api/progress?')) {
+      const params = new URL('http://local' + path).searchParams;
+      assert.equal(params.get('learner_id'), 'a'.repeat(32));
+      return {ok: true, json: async () => ({attempts: [], topic_scores: server.progress[params.get('document_id')] || {}})};
+    }
     server.posts++;
     const body = JSON.parse(options.body);
     if (path === '/api/upload') {
@@ -76,6 +85,22 @@ const context = {
     if (path === '/api/ask') {
       if (server.askGate) await server.askGate;
       return {ok: true, json: async () => ({answer: 'Answer for ' + body.document_id, sources: []})};
+    }
+    if (path === '/api/quiz') {
+      return {ok: true, json: async () => ({quiz_id: String(++server.quizCount).padStart(32, 'c'), questions: [
+        {question: 'First?', options: ['Wrong', 'Right'], answer_index: 1, topic: 'Page 1'},
+        {question: 'Second?', options: ['Right', 'Wrong'], answer_index: 0, topic: 'Page 1'}
+      ]})};
+    }
+    if (path === '/api/quiz/submit') {
+      server.submissions.push(body);
+      if (server.submitGate) await server.submitGate;
+      if (server.submitFails) return {ok: false, json: async () => ({error: 'Could not save data.'})};
+      server.progress.mine1 = {'Page 1': {correct: 1, total: 2}};
+      return {ok: true, json: async () => ({correct: 1, total: 2, results: [
+        {correct: true, expected_answer: 'Right', source_id: 'p1-1', page: 1},
+        {correct: false, expected_answer: 'Right', source_id: 'p1-1', page: 1}
+      ]})};
     }
     throw new Error('Unexpected request ' + path);
   }
@@ -156,6 +181,45 @@ const choose = index => rows()[index].children[1];
   assert.equal(el('ask').disabled, false);
   await el('ask').onclick();
   assert.equal(el('answer').textContent, 'Answer for mine1');
+
+  // Submit to the server, keep a failed save retryable, and never award local credit.
+  await el('makeQuiz').onclick();
+  let submit = el('quiz').children.at(-1);
+  server.submitFails = true;
+  await submit.onclick();
+  assert.equal(server.submissions.length, 1);
+  assert.deepEqual(server.submissions[0].answers, [1, null]);
+  assert.equal(server.submissions[0].learner_id, 'a'.repeat(32));
+  assert.equal('score' in server.submissions[0], false);
+  assert.equal(el('quizResult').textContent, 'Could not save data.');
+  assert.equal(submit.disabled, false);
+  assert.equal(store.has('noteworthy-topic-scores'), false);
+
+  server.submitFails = false;
+  await submit.onclick();
+  await flush();
+  assert.equal(server.submissions[1].quiz_id, server.submissions[0].quiz_id);
+  assert.equal(submit.disabled, true);
+  assert.equal(el('quizResult').textContent, 'Score: 1 / 2');
+  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
+
+  // Server progress is restored on selecting the document, independent of legacy local scores.
+  context.showScores({});
+  context.selectDocument(server.documents[0]);
+  await flush();
+  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
+
+  // A late submission response must not append the old quiz's feedback to another document.
+  await el('makeQuiz').onclick();
+  submit = el('quiz').children.at(-1);
+  let releaseSubmit;
+  server.submitGate = new Promise(resolve => { releaseSubmit = resolve; });
+  const submitting = submit.onclick();
+  context.selectDocument(server.documents[1]);
+  releaseSubmit(); await submitting; await flush();
+  assert.equal(el('quizResult').textContent, '');
+  assert.equal(el('quiz').children.length, 0);
+  server.submitGate = null;
 
   // Documents with the same name are told apart by a short ID.
   vm.runInContext('pendingUploads = []', context);

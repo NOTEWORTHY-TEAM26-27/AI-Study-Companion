@@ -9,8 +9,9 @@ import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
+from .attempts import AttemptStore
 from .core import build_prompt, extract_passages
 from .models import generate_answer
 from .quiz import generate_quiz
@@ -35,6 +36,7 @@ class StudyServer(ThreadingHTTPServer):
         self.data_dir = data_dir
         self.documents = load_documents(data_dir)
         self.document_lock = threading.Lock()
+        self.attempts = AttemptStore(data_dir)
         self.answer_generator = answer_generator
         self.search = search
         super().__init__(address, Handler)
@@ -77,12 +79,21 @@ class Handler(BaseHTTPRequestHandler):
                     for key, (name, passages) in self.server.documents.items()
                 ]
             self._json(200, {"documents": documents})
+        elif path == "/api/progress":
+            params = parse_qs(urlsplit(self.path).query)
+            try:
+                progress = self.server.attempts.progress(
+                    params.get("learner_id", [None])[0], params.get("document_id", [None])[0]
+                )
+                self._json(200, progress)
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
         else:
             self._json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
-        if path not in {"/api/upload", "/api/ask", "/api/quiz"}:
+        if path not in {"/api/upload", "/api/ask", "/api/quiz", "/api/quiz/submit"}:
             self._json(404, {"error": "Not found"})
             return
         try:
@@ -95,6 +106,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise ValueError("Send a JSON object.")
+            if path == "/api/quiz/submit":
+                result = self.server.attempts.submit(
+                    payload.get("quiz_id"), payload.get("learner_id"), payload.get("answers")
+                )
+                self._json(200, result)
+                return
             if path == "/api/upload":
                 name = self._string(payload, "name", 180)
                 if not name.lower().endswith(".pdf"):
@@ -133,7 +150,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             passages = document[1]
             if path == "/api/quiz":
-                self._json(200, {"questions": generate_quiz(passages)})
+                self._json(200, self.server.attempts.issue(document_id, generate_quiz(passages)))
                 return
             question = self._string(payload, "question", 1000)
             matches = self.server.search.retrieve(document_id, passages, question)
@@ -155,9 +172,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(exc)})
         except RuntimeError as exc:
             self._json(503, {"error": str(exc)})
+        except LookupError as exc:
+            self._json(404, {"error": str(exc)})
         except OSError:
-            self.log_error("Could not save document to storage")
-            self._json(500, {"error": "Could not save document. Please try again."})
+            self.log_error("Could not save data to storage")
+            self._json(500, {"error": "Could not save data. Please try again."})
 
 
 def create_server(

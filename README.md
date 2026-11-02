@@ -47,6 +47,41 @@ progress: the app now has embedding search from the Sprint 1 RAG test (see
 Passage search), and the question generation and knowledge graph research code
 is in `research/` but not used by the app yet.
 
+## Quiz grading and saved progress (SCRUM-81, SCRUM-83)
+
+The page submits answers to the server and reloads saved topic scores when you
+select a PDF. Quizzes and attempts are JSON files under `DOCUMENTS_DIR/quizzes`
+and `DOCUMENTS_DIR/attempts`; the existing documents Docker volume preserves
+them across restarts and redeploys. One attempt per browser and issued quiz is
+saved atomically. Retrying a submission returns that same result and does not
+count it twice. Generate another quiz to make a new attempt.
+
+Progress uses an anonymous browser ID stored in localStorage. It is separate
+for each browser, not an authenticated account; clearing browser storage loses
+that browser's progress identifier. Existing browser-only scores are not
+imported, since the server cannot verify them. Accounts and a database remain
+later work. This store supports the current single server process.
+
+For frontend and generator integration:
+
+- `POST /api/quiz` with `{"document_id":"..."}` returns `quiz_id` and `questions`.
+- `POST /api/quiz/submit` with `{"quiz_id":"...","learner_id":"...","answers":[0,null,2,1,0]}`
+  returns `correct`, `total`, `score` (percent), source-linked `results`, and
+  `topic_scores`. IDs are 32 lowercase hexadecimal characters. Use `null` for
+  unanswered questions and include one entry per question. Client-supplied keys
+  and scores are ignored.
+- `GET /api/progress?learner_id=...&document_id=...` returns saved `attempts`
+  and aggregated `topic_scores`; omit `document_id` for all that browser's PDFs.
+
+The grading function accepts current `options`/`answer_index` questions and the
+shared four-format schema in `research/question_generation/validate_questions.py`.
+For that schema, submit multiple-choice labels (`A`–`D`), `True`/`False` strings,
+and text for blanks and short answers (a list for multiple blanks). Text matching
+normalizes Unicode, case and whitespace, then compares exactly. It does not
+award semantic or partial credit or make model calls. The current page/generator
+still uses five multiple-choice questions; the separate four-format generator
+and quiz-page integration remain their owners' work.
+
 ## Local setup
 
 Requires **Python 3.11 or newer**. Check `python3 --version` first; on macOS,
