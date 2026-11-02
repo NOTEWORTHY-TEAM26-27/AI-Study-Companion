@@ -36,11 +36,13 @@ const server = {
     {id: 'other', name: 'someone-else.pdf', passages: 3, status: 'ready'}
   ],
   uploadMode: 'ok', uploadGate: null, askGate: null, posts: 0,
-  quizCount: 0, submissions: [], submitFails: false, submitGate: null, progress: {}
+  quizCount: 0, submissions: [], submitFails: false, submitGate: null, progress: {},
+  pendingProgress: null
 };
 const selectedAnswers = new Map([[0, {value: '1'}]]);
 const context = {
-  crypto: {randomUUID: () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'},
+  // getRandomValues is available on HTTP LAN addresses where randomUUID is absent.
+  crypto: {getRandomValues: bytes => bytes.fill(0xaa)},
   document: {
     // Like a browser: an id that is not on the page returns null.
     getElementById(id) {
@@ -66,6 +68,11 @@ const context = {
     if (path.startsWith('/api/progress?')) {
       const params = new URL('http://local' + path).searchParams;
       assert.equal(params.get('learner_id'), 'a'.repeat(32));
+      if (server.pendingProgress) {
+        const pending = server.pendingProgress; server.pendingProgress = null;
+        await pending;
+        return {ok: true, json: async () => ({attempts: [], topic_scores: {}})};
+      }
       return {ok: true, json: async () => ({attempts: [], topic_scores: server.progress[params.get('document_id')] || {}})};
     }
     server.posts++;
@@ -195,12 +202,18 @@ const choose = index => rows()[index].children[1];
   assert.equal(submit.disabled, false);
   assert.equal(store.has('noteworthy-topic-scores'), false);
 
+  // An older read for the same PDF must not replace the scores loaded after submission.
+  let releaseProgress;
+  server.pendingProgress = new Promise(resolve => { releaseProgress = resolve; });
+  const staleProgress = context.loadScores('mine1');
   server.submitFails = false;
   await submit.onclick();
   await flush();
   assert.equal(server.submissions[1].quiz_id, server.submissions[0].quiz_id);
   assert.equal(submit.disabled, true);
   assert.equal(el('quizResult').textContent, 'Score: 1 / 2');
+  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
+  releaseProgress(); await staleProgress;
   assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
 
   // Server progress is restored on selecting the document, independent of legacy local scores.
