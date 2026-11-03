@@ -40,7 +40,7 @@ The AI Study Companion will explore features such as:
 
 ## Project Status
 
-Currently in **Sprint 2** (10/05 to 10/23). One app runs locally, in Docker, and
+One app runs locally, in Docker, and
 on staging at <https://143-244-212-41.sslip.io>. Prototype integration
 ([SCRUM-56](https://noteworthy-uta.atlassian.net/browse/SCRUM-56)) is still in
 progress: the app now has embedding search from the Sprint 1 RAG test (see
@@ -49,36 +49,47 @@ is in `research/` but not used by the app yet.
 
 ## Quiz grading and saved progress (SCRUM-81, SCRUM-83)
 
-The page submits answers to the server and reloads saved topic scores when you
-select a PDF. Quizzes and attempts are JSON files under `DOCUMENTS_DIR/quizzes`
+The page submits answers to the server and restores the last selected PDF and
+its saved topic scores after a reload (falling back to the first available PDF
+uploaded from that browser). Quizzes and attempts are JSON files under
+`DOCUMENTS_DIR/quizzes`
 and `DOCUMENTS_DIR/attempts`; the existing documents Docker volume preserves
 them across restarts and redeploys. One attempt per browser and issued quiz is
 saved atomically. Retrying a submission returns that same result and does not
 count it twice. Generate another quiz to make a new attempt.
 
-Progress uses an anonymous browser ID stored in localStorage. It is separate
-for each browser, not an authenticated account; clearing browser storage loses
+Progress uses an anonymous browser ID stored in localStorage, alongside document
+IDs and the last selected PDF ID. Scores themselves are stored on the server.
+Progress is separate for each browser, not an authenticated account; clearing browser storage loses
 that browser's progress identifier. Existing browser-only scores are not
 imported, since the server cannot verify them. Accounts and a database remain
 later work. This store supports the current single server process.
 
 For frontend and generator integration:
 
-- `POST /api/quiz` with `{"document_id":"..."}` returns `quiz_id` and `questions`.
+- `POST /api/quiz` with `{"document_id":"..."}` returns `quiz_id` and public
+  `questions` (prompt, options/choices, type, topic, source ID/page where present).
+  Answer keys and source text/excerpts stay on the server until submission.
 - `POST /api/quiz/submit` with `{"quiz_id":"...","learner_id":"...","answers":[0,null,2,1,0]}`
   returns `correct`, `total`, `score` (percent), source-linked `results`, and
   `topic_scores`. IDs are 32 lowercase hexadecimal characters. Use `null` for
   unanswered questions and include one entry per question. Client-supplied keys
   and scores are ignored.
-- `GET /api/progress?learner_id=...&document_id=...` returns saved `attempts`
-  and aggregated `topic_scores`; omit `document_id` for all that browser's PDFs.
+- `GET /api/progress?learner_id=...&document_id=...` returns only aggregated
+  `topic_scores`; omit `document_id` for all that browser's PDFs. It does not
+  return attempt bodies or answer keys. It scans the immutable saved attempts
+  without holding the submit lock; a concurrent new attempt may appear on the
+  next read. No new cache or database is required.
 
 The grading function accepts current `options`/`answer_index` questions and the
 shared four-format schema in `research/question_generation/validate_questions.py`.
 For that schema, submit multiple-choice labels (`A`–`D`), `True`/`False` strings,
 and text for blanks and short answers (a list for multiple blanks). Text matching
-normalizes Unicode, case and whitespace, then compares exactly. It does not
-award semantic or partial credit or make model calls. The current page/generator
+normalizes Unicode, case and whitespace, then compares exactly. Short answers
+also ignore surrounding quotes and trailing sentence punctuation (`. , : ; ?`).
+Signs, leading decimal points, internal punctuation and factorial `!` stay
+significant: `-1` differs from `1`, `.5` differs from `5`, and `5!` differs from `5`.
+This does not award semantic or partial credit or make model calls. The current page/generator
 still uses five multiple-choice questions; the separate four-format generator
 and quiz-page integration remain their owners' work.
 
@@ -288,10 +299,12 @@ outside the source checkout. Runtime dependencies are pinned in
 | `noteworthy_app/core.py` | Typed PDF extraction, keyword retrieval, and cited answer prompts |
 | `noteworthy_app/search.py` | Passage search setting: keyword or embedding search |
 | `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions |
+| `noteworthy_app/grading.py` | Server-side grading for the current and shared four-format question schemas |
+| `noteworthy_app/attempts.py` | Persist issued quizzes and attempts; summarize saved topic scores |
 | `noteworthy_app/models.py` | Ollama and DigitalOcean adapter exposing `generate_answer(prompt) -> str` |
 | `noteworthy_app/server.py` | HTTP routes, validation, and in-memory document lookup |
 | `noteworthy_app/storage.py` | Save original PDFs and passages; restore documents on startup |
-| `noteworthy_app/static/index.html` | Existing upload, answer, quiz, and browser-local score interface |
+| `noteworthy_app/static/index.html` | Upload, answer, quiz submission, and restored server-score interface |
 | `tests/` | Offline extraction, quiz, model adapter, and HTTP behavior checks |
 | `research/` | Question generation, knowledge graph, and RAG search research scripts (not run by the app) |
 | `deploy/`, `scripts/` | Staging server files, the deploy script, and the deploy key setup |
@@ -309,18 +322,22 @@ model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
 | `GET /api/documents` | List current and restored documents (ID, name, passage count, and status) from the configured storage directory |
 | `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID, passage count, and status |
 | `POST /api/ask` | Accept `document_id` and `question`; return answer and source passages |
-| `POST /api/quiz` | Accept `document_id`; return five questions with options and source IDs |
+| `POST /api/quiz` | Accept `document_id`; return `quiz_id` and five public questions with options and source IDs/pages, without answer keys or excerpts |
+| `POST /api/quiz/submit` | Accept `quiz_id`, `learner_id`, and `answers`; grade and persist one attempt, then return scores and source-linked feedback |
+| `GET /api/progress` | Accept `learner_id` and optional `document_id` query parameters; return only aggregated `topic_scores` |
 
 The PDF limit is 12 MiB. Invalid JSON and fields return 400, missing routes or
 documents return 404, oversized uploads return 413, storage failures return 500,
 and model failures return 503.
 
-## Prototype limits and Sprint 2 status
+## Prototype limits
 
 This is a development baseline. Documents are shared within one server instance
-and persist in its configured storage directory; scores live in browser local
-storage. When the page opens it lists the documents uploaded from that browser
-(Ready). An upload in progress shows Processing, and a failed upload shows Failed
+and persist in its configured storage directory, along with quiz attempts and
+scores. Browser local storage contains identifiers and selection metadata.
+When the page opens it lists that browser's uploaded documents (Ready), restores
+the selected PDF, and loads its server-side scores. An upload in progress shows
+Processing, and a failed upload shows Failed
 with the reason until the page is reloaded. The page checks the file type and
 the 12 MB limit before uploading. The API itself is not limited to one student
 until accounts are added (SCRUM-116, PBI 20).

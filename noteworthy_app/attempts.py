@@ -91,21 +91,19 @@ class AttemptStore:
 
     def progress(self, learner_id: str, document_id: str | None = None) -> dict:
         learner_id = _identifier(learner_id)
-        attempts = []
         topics = {}
-        with self.lock:
-            for path in sorted((self.directory / "attempts" / learner_id).glob("*.json")):
-                try:
-                    attempt = self._read_attempt(path, learner_id)
-                except (OSError, ValueError, TypeError, KeyError):
-                    LOGGER.warning("Skipping unreadable quiz attempt %s", path.name)
-                    continue
-                if document_id is not None and attempt["document_id"] != document_id:
-                    continue
-                attempts.append(attempt)
-                for topic, values in attempt["topic_scores"].items():
-                    totals = topics.setdefault(topic, {"correct": 0, "total": 0})
-                    totals["correct"] += values["correct"]
-                    totals["total"] += values["total"]
-        attempts.sort(key=lambda item: item["created_at"])
-        return {"attempts": attempts, "topic_scores": topics}
+        # Published attempts are immutable and atomically replaced. Readers need not
+        # hold the submit lock; a concurrent new attempt appears on the next read.
+        for path in (self.directory / "attempts" / learner_id).glob("*.json"):
+            try:
+                attempt = self._read_attempt(path, learner_id)
+            except (OSError, ValueError, TypeError, KeyError):
+                LOGGER.warning("Skipping unreadable quiz attempt %s", path.name)
+                continue
+            if document_id is not None and attempt["document_id"] != document_id:
+                continue
+            for topic, values in attempt["topic_scores"].items():
+                totals = topics.setdefault(topic, {"correct": 0, "total": 0})
+                totals["correct"] += values["correct"]
+                totals["total"] += values["total"]
+        return {"topic_scores": topics}

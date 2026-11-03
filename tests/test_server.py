@@ -116,8 +116,10 @@ class ServerTests(unittest.TestCase):
         status, quiz = self.post("/api/quiz", {"document_id": document_id})
         self.assertEqual(status, 200)
         self.assertIn("quiz_id", quiz)
-        answers = [q["answer_index"] for q in quiz["questions"]]
-        answers[0] = (answers[0] + 1) % 4
+        for question in quiz["questions"]:
+            self.assertEqual(set(question), {"question", "options", "source_id", "page", "topic"})
+        # Hand-checked keys for study_pdf are 0,1,2,3,0. Deliberately miss the first.
+        answers = [1, 1, 2, 3, 0]
         status, result = self.post(
             "/api/quiz/submit",
             {
@@ -133,11 +135,36 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((result["correct"], result["total"], result["score"]), (4, 5, 80))
         status, content = self.request("/api/progress?learner_id=" + "a" * 32)
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(content)["attempts"], [result])
+        self.assertEqual(
+            json.loads(content), {"topic_scores": {"Page 1": {"correct": 4, "total": 5}}}
+        )
         status, content = self.request("/api/progress?learner_id=" + "b" * 32)
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(content)["attempts"], [])
+        self.assertEqual(json.loads(content), {"topic_scores": {}})
         self.assertEqual(self.prompts, [])
+
+    def test_shared_question_schema_keeps_keys_and_excerpts_private_until_submission(self):
+        from tests.test_grading import questions
+
+        document_id = self.upload()
+        with mock.patch("noteworthy_app.server.generate_quiz", return_value=questions()):
+            status, quiz = self.post("/api/quiz", {"document_id": document_id})
+        self.assertEqual(status, 200)
+        self.assertEqual(quiz["questions"][0]["choices"]["B"], "7")
+        for question in quiz["questions"]:
+            self.assertEqual(set(question), {"type", "question", "choices", "topic", "source_page"})
+        status, result = self.post(
+            "/api/quiz/submit",
+            {
+                "quiz_id": quiz["quiz_id"],
+                "learner_id": "a" * 32,
+                "answers": ["B", "True", "Red blood cells", "Photosynthesis"],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["correct"], 4)
+        self.assertEqual(result["results"][0]["expected_answer"], "7")
+        self.assertEqual(result["results"][0]["source_text"], "Seven is prime.")
 
     def test_quiz_api_reports_invalid_submission_and_unknown_quiz(self):
         for quiz_id, learner_id, expected in [
