@@ -109,9 +109,12 @@ scp deploy@<STAGING_HOST>:backups/noteworthy-documents-<UTC time>.tar.gz .
 ```
 
 Before a big change, such as a Droplet resize or a change to how files are saved, you can also take a
-snapshot of the whole Droplet: open the Droplet in DigitalOcean, then Snapshots. A snapshot costs $0.06
-per GB per month while it is kept (https://docs.digitalocean.com/products/snapshots/details/pricing/,
-checked November 2, 2026). Delete it once the change works.
+snapshot of the whole Droplet: open the Droplet in DigitalOcean, then Backups & Snapshots, Take snapshot.
+DigitalOcean recommends turning the Droplet off first for a consistent copy, so staging is down until it
+is back on (https://docs.digitalocean.com/products/snapshots/how-to/snapshot-droplets/, checked
+November 2, 2026). A snapshot costs $0.06 per GB of snapshot size per month while it is kept
+(https://docs.digitalocean.com/products/snapshots/details/pricing/, checked November 2, 2026).
+Delete it once the change works.
 
 To restore a backup:
 
@@ -130,7 +133,8 @@ To restore a backup:
      | docker compose -f compose.yaml -f compose.staging.yaml exec -T app tar -C /data/documents -xf -
    docker compose -f compose.yaml -f compose.staging.yaml restart app
    ```
-5. Open `https://<STAGING_HOST>/health`, then check that the documents and saved scores are back.
+5. Open `https://<STAGING_HOST>/api/documents` and check that it lists the restored documents. The web
+   page itself lists only documents uploaded from that browser.
 
 A restore adds the files in the backup and replaces files with the same name. Files saved after the
 backup stay.
@@ -157,9 +161,9 @@ its reasoning in it).
 
 Do this a few days before 11/30, so there is time to fix problems.
 
-1. Health: `https://<STAGING_HOST>/health` answers.
-2. One full flow on staging: upload a PDF, ask one question, make a quiz, and submit it. Reload the page
-   and check that the saved score is still there.
+1. Health: `https://<STAGING_HOST>/health` answers `{"status": "ok"}`.
+2. One full flow on staging: upload a PDF, ask one question, make a quiz, and submit it. Reload the page,
+   click Use next to the PDF, and check that Scores by topic still shows the result.
 3. Backup: run `./scripts/backup_staging.sh` on the server and copy the file off with `scp`.
 4. Cost:
    - DigitalOcean Billing page: check this month's usage so far.

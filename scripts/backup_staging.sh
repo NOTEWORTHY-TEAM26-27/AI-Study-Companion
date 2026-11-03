@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if [ ! -f .env ]; then
-  echo "Missing .env. Run this in the staging repo folder (see deploy/STAGING.md)." >&2
+  echo "Missing .env. Run this on the staging server (see deploy/STAGING.md)." >&2
   exit 1
 fi
 
@@ -16,7 +16,7 @@ archive="$backup_dir/noteworthy-documents-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
 partial="$archive.partial"
 
 if ! "${compose[@]}" exec -T app true; then
-  echo "The app container is not running, so there is nothing to back up. See: ${compose[*]} ps" >&2
+  echo "The app container is not running or could not be reached, so nothing was backed up. See: ${compose[*]} ps" >&2
   exit 1
 fi
 
@@ -39,7 +39,7 @@ if ! "${compose[@]}" exec -T app tar -C /data/documents --exclude='.upload-*' -c
 fi
 
 # Read the whole archive back and count what it holds. A document counts only when both its .json
-# and .pdf are there, the same rule the app uses at startup.
+# and .pdf are there, because the app skips a .json without its .pdf at startup.
 if ! gzip -t "$partial" || ! counts=$(tar -tzf "$partial" | awk '
   { entries++ }
   /^\.\/[^\/]+\.pdf$/ { pdf[substr($0, 1, length($0) - 4)] = 1 }
