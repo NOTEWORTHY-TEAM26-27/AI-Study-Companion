@@ -111,6 +111,26 @@ class GradingTests(unittest.TestCase):
         self.assertEqual(grade_quiz([item], ["Plants turn light into food."])["correct"], 0)
         self.assertEqual(grade_quiz([item], ["Photosynthesis"])["correct"], 1)
 
+    def test_short_answer_ignores_trailing_sentence_punctuation(self):
+        for answer in ["Photosynthesis.", "  PHOTOSYNTHESIS? ", '"Photosynthesis."']:
+            with self.subTest(answer=answer):
+                self.assertEqual(grade_quiz([questions()[3]], [answer])["correct"], 1)
+
+    def test_short_answer_keeps_math_and_internal_punctuation_significant(self):
+        for key, wrong in [
+            ("-1", "1"),
+            ("3.14", "314"),
+            (".5", "5"),
+            ("5!", "5"),
+            ("C++", "C"),
+            ("f'", "f"),
+            ("f''", "f"),
+        ]:
+            with self.subTest(key=key):
+                item = {**questions()[3], "answer": key}
+                self.assertEqual(grade_quiz([item], [wrong])["correct"], 0)
+                self.assertEqual(grade_quiz([item], [key])["correct"], 1)
+
     def test_empty_or_unknown_question_format_is_rejected(self):
         for items in [[], [{**questions()[0], "type": "Essay"}]]:
             with self.assertRaises(ValueError):

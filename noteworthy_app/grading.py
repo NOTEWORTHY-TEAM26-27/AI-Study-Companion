@@ -7,6 +7,16 @@ def _normalize(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
+def _short_answer(text: str) -> str:
+    # Remove paired quotation marks, never an unpaired derivative/transpose prime.
+    normalized = _normalize(text).rstrip(" .,:;?")
+    for opening, closing in [('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’")]:
+        if len(normalized) >= 2 and normalized.startswith(opening) and normalized.endswith(closing):
+            normalized = normalized[1:-1].strip()
+            break
+    return normalized.rstrip(" .,:;?")
+
+
 def grade_quiz(questions: list[dict], answers: list) -> dict:
     """Score against server-owned keys. Missing answers are represented by null."""
     if not questions:
@@ -48,7 +58,10 @@ def grade_quiz(questions: list[dict], answers: list) -> dict:
             else:
                 if answer is not None and (not isinstance(answer, str) or len(answer) > 4000):
                     raise ValueError("Text answers must be strings of at most 4000 characters.")
-                correct = bool(answer and _normalize(answer) == _normalize(expected))
+                normalize = _short_answer if kind == "Short Answer" else _normalize
+                correct = bool(
+                    answer and normalize(answer) and normalize(answer) == normalize(expected)
+                )
         else:
             raise ValueError("Unknown question format.")
         page = question.get("page", question.get("source_page"))

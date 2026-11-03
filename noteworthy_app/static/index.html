@@ -48,6 +48,7 @@
   let scoreRequest = 0;
   const MAX_PDF_BYTES = 12 * 1024 * 1024;
   const MY_DOCUMENTS_KEY = 'noteworthy-my-documents';
+  const SELECTED_DOCUMENT_KEY = 'noteworthy-selected-document';
   const LEARNER_KEY = 'noteworthy-learner-id';
   let learnerId;
   try { learnerId = localStorage.getItem(LEARNER_KEY); } catch (error) { /* storage unavailable */ }
@@ -89,6 +90,7 @@
       $('quiz').replaceChildren(); $('quizResult').textContent = ''; currentQuizId = null;
     }
     selectedDocument = uploadedDocument;
+    try { localStorage.setItem(SELECTED_DOCUMENT_KEY, uploadedDocument.id); } catch (error) { /* this session only */ }
     $('ask').disabled = askBusy;
     $('makeQuiz').disabled = quizBusy;
     $('status').textContent = `Selected: ${uploadedDocument.name}.`;
@@ -127,7 +129,17 @@
       if (!response.ok) throw new Error('Could not load your documents.');
       const mine = myDocumentIds();
       renderDocuments(((await response.json()).documents || []).filter(item => mine.has(item.id)));
-    } catch (error) { $('status').textContent = 'Could not load your documents.'; }
+      if (!selectedDocument) {
+        let savedId;
+        try { savedId = localStorage.getItem(SELECTED_DOCUMENT_KEY); } catch (error) { /* storage unavailable */ }
+        const restored = storedDocuments.find(item => item.id === savedId) || storedDocuments[0];
+        if (restored) selectDocument(restored);
+        else showScores({});
+      }
+    } catch (error) {
+      $('status').textContent = 'Could not load your documents.';
+      if (!selectedDocument) $('topicScores').textContent = 'Could not load saved scores.';
+    }
   }
   $('upload').onclick = async () => {
     const file = $('pdf').files[0];
@@ -255,7 +267,7 @@
     }
     finally { quizBusy = false; $('makeQuiz').disabled = !selectedDocument; }
   };
-  showScores({});
+  $('topicScores').textContent = 'Loading saved scores…';
   loadDocuments();
 </script>
 </html>

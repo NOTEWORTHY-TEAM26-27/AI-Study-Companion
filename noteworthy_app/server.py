@@ -21,6 +21,16 @@ from .storage import load_documents, save_document
 STATIC = Path(__file__).parent / "static" / "index.html"
 MAX_PDF_BYTES = 12 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_PDF_BYTES * 2
+PUBLIC_QUESTION_FIELDS = {
+    "type",
+    "question",
+    "options",
+    "choices",
+    "source_id",
+    "page",
+    "source_page",
+    "topic",
+}
 
 
 class StudyServer(ThreadingHTTPServer):
@@ -150,7 +160,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             passages = document[1]
             if path == "/api/quiz":
-                self._json(200, self.server.attempts.issue(document_id, generate_quiz(passages)))
+                quiz = self.server.attempts.issue(document_id, generate_quiz(passages))
+                # Keep authoritative keys and excerpts on disk until the quiz is submitted.
+                public_questions = [
+                    {key: value for key, value in item.items() if key in PUBLIC_QUESTION_FIELDS}
+                    for item in quiz["questions"]
+                ]
+                self._json(200, {**quiz, "questions": public_questions})
                 return
             question = self._string(payload, "question", 1000)
             matches = self.server.search.retrieve(document_id, passages, question)

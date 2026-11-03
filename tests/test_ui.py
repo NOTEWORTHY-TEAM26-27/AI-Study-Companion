@@ -36,7 +36,8 @@ const server = {
     {id: 'other', name: 'someone-else.pdf', passages: 3, status: 'ready'}
   ],
   uploadMode: 'ok', uploadGate: null, askGate: null, posts: 0,
-  quizCount: 0, submissions: [], submitFails: false, submitGate: null, progress: {},
+  quizCount: 0, submissions: [], submitFails: false, submitGate: null,
+  progress: {mine1: {'Page 1': {correct: 1, total: 2}}},
   pendingProgress: null
 };
 const selectedAnswers = new Map([[0, {value: '1'}]]);
@@ -71,9 +72,9 @@ const context = {
       if (server.pendingProgress) {
         const pending = server.pendingProgress; server.pendingProgress = null;
         await pending;
-        return {ok: true, json: async () => ({attempts: [], topic_scores: {}})};
+        return {ok: true, json: async () => ({topic_scores: {}})};
       }
-      return {ok: true, json: async () => ({attempts: [], topic_scores: server.progress[params.get('document_id')] || {}})};
+      return {ok: true, json: async () => ({topic_scores: server.progress[params.get('document_id')] || {}})};
     }
     server.posts++;
     const body = JSON.parse(options.body);
@@ -95,8 +96,8 @@ const context = {
     }
     if (path === '/api/quiz') {
       return {ok: true, json: async () => ({quiz_id: String(++server.quizCount).padStart(32, 'c'), questions: [
-        {question: 'First?', options: ['Wrong', 'Right'], answer_index: 1, topic: 'Page 1'},
-        {question: 'Second?', options: ['Right', 'Wrong'], answer_index: 0, topic: 'Page 1'}
+        {question: 'First?', options: ['Wrong', 'Right'], topic: 'Page 1'},
+        {question: 'Second?', options: ['Right', 'Wrong'], topic: 'Page 1'}
       ]})};
     }
     if (path === '/api/quiz/submit') {
@@ -117,15 +118,17 @@ const el = id => context.document.getElementById(id);
 const rows = () => el('documents').children;
 const rowText = () => rows().map(row => row.children[0].textContent);
 const choose = index => rows()[index].children[1];
+const scriptSource = fs.readFileSync(0, 'utf8');
 
 (async () => {
   vm.createContext(context);
-  vm.runInContext(fs.readFileSync(0, 'utf8'), context);
+  vm.runInContext(scriptSource, context);
   await flush(); await flush();
 
   // The list loads when the page opens and shows only documents uploaded from this browser.
   assert.deepEqual(rowText(), ['stored.pdf · 1 passages · Ready']);
-  assert.equal(choose(0).textContent, 'Use');
+  assert.equal(choose(0).textContent, 'Selected');
+  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
 
   // Files are checked before upload, and a rejected file sends no request.
   assert.equal(context.checkFile(undefined), 'Choose a PDF first.');
@@ -233,6 +236,26 @@ const choose = index => rows()[index].children[1];
   assert.equal(el('quizResult').textContent, '');
   assert.equal(el('quiz').children.length, 0);
   server.submitGate = null;
+
+  // Reload restores the last selected owned PDF and its server scores, without a click.
+  server.progress.new123456 = {'Page 2': {correct: 2, total: 3}};
+  context.selectDocument(server.documents.find(item => item.id === 'new123456'));
+  await flush();
+  elements.clear();
+  const reloaded = vm.createContext({...context});
+  vm.runInContext(scriptSource, reloaded);
+  await flush(); await flush();
+  assert.equal(choose(1).textContent, 'Selected');
+  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 2: 67% (2/3)');
+
+  // A stale/foreign saved selection falls back to an owned document.
+  store.set('noteworthy-selected-document', 'other');
+  elements.clear();
+  const staleSelection = vm.createContext({...context});
+  vm.runInContext(scriptSource, staleSelection);
+  await flush(); await flush();
+  assert.equal(choose(0).textContent, 'Selected');
+  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
 
   // Documents with the same name are told apart by a short ID.
   vm.runInContext('pendingUploads = []', context);
