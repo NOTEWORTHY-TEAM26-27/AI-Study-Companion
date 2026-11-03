@@ -8,8 +8,13 @@ def _normalize(text: str) -> str:
 
 
 def _short_answer(text: str) -> str:
-    # Ignore sentence punctuation at the edges, not math operators or internal dots.
-    return _normalize(text).lstrip(" \"'“”‘’").rstrip(" .,:;?\"'“”‘’")
+    # Remove paired quotation marks, never an unpaired derivative/transpose prime.
+    normalized = _normalize(text).rstrip(" .,:;?")
+    for opening, closing in [('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’")]:
+        if len(normalized) >= 2 and normalized.startswith(opening) and normalized.endswith(closing):
+            normalized = normalized[1:-1].strip()
+            break
+    return normalized.rstrip(" .,:;?")
 
 
 def grade_quiz(questions: list[dict], answers: list) -> dict:

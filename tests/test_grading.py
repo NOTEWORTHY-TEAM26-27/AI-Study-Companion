@@ -117,7 +117,15 @@ class GradingTests(unittest.TestCase):
                 self.assertEqual(grade_quiz([questions()[3]], [answer])["correct"], 1)
 
     def test_short_answer_keeps_math_and_internal_punctuation_significant(self):
-        for key, wrong in [("-1", "1"), ("3.14", "314"), (".5", "5"), ("5!", "5"), ("C++", "C")]:
+        for key, wrong in [
+            ("-1", "1"),
+            ("3.14", "314"),
+            (".5", "5"),
+            ("5!", "5"),
+            ("C++", "C"),
+            ("f'", "f"),
+            ("f''", "f"),
+        ]:
             with self.subTest(key=key):
                 item = {**questions()[3], "answer": key}
                 self.assertEqual(grade_quiz([item], [wrong])["correct"], 0)

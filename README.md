@@ -86,8 +86,8 @@ shared four-format schema in `research/question_generation/validate_questions.py
 For that schema, submit multiple-choice labels (`A`–`D`), `True`/`False` strings,
 and text for blanks and short answers (a list for multiple blanks). Text matching
 normalizes Unicode, case and whitespace, then compares exactly. Short answers
-also ignore surrounding quotes and trailing sentence punctuation (`. , : ; ?`).
-Signs, leading decimal points, internal punctuation and factorial `!` stay
+also ignore paired surrounding quotes and trailing sentence punctuation (`. , : ; ?`).
+Signs, leading decimal points, internal punctuation, primes and factorial `!` stay
 significant: `-1` differs from `1`, `.5` differs from `5`, and `5!` differs from `5`.
 This does not award semantic or partial credit or make model calls. The current page/generator
 still uses five multiple-choice questions; the separate four-format generator
