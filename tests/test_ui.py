@@ -238,14 +238,15 @@ const scriptSource = fs.readFileSync(0, 'utf8');
   server.submitGate = null;
 
   // Reload restores the last selected owned PDF and its server scores, without a click.
-  context.selectDocument(server.documents[0]);
+  server.progress.new123456 = {'Page 2': {correct: 2, total: 3}};
+  context.selectDocument(server.documents.find(item => item.id === 'new123456'));
   await flush();
   elements.clear();
   const reloaded = vm.createContext({...context});
   vm.runInContext(scriptSource, reloaded);
   await flush(); await flush();
-  assert.equal(choose(0).textContent, 'Selected');
-  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
+  assert.equal(choose(1).textContent, 'Selected');
+  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 2: 67% (2/3)');
 
   // A stale/foreign saved selection falls back to an owned document.
   store.set('noteworthy-selected-document', 'other');
@@ -254,6 +255,7 @@ const scriptSource = fs.readFileSync(0, 'utf8');
   vm.runInContext(scriptSource, staleSelection);
   await flush(); await flush();
   assert.equal(choose(0).textContent, 'Selected');
+  assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
 
   // Documents with the same name are told apart by a short ID.
   vm.runInContext('pendingUploads = []', context);
