@@ -60,12 +60,8 @@ def generate_quiz(passages: list[Passage], rng: random.Random | None = None) -> 
     pool = [candidate[2] for candidate in candidates]
     questions = []
     for passage, sentence, answer in selected:
-        others = []
-        for possible in pool:
-            if possible.lower() != answer.lower() and possible.lower() not in {
-                o.lower() for o in others
-            }:
-                others.append(possible)
+        # _candidates keeps answers unique ignoring case, so this needs no duplicate check.
+        others = [possible for possible in pool if possible.lower() != answer.lower()]
         if len(others) < 3:
             raise ValueError("The PDF needs more distinct terms for a quiz.")
         # Random distractors and key position, so the answer is not the odd one out or a fixed letter.

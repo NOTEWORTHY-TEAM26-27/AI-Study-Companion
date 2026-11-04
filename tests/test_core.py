@@ -34,26 +34,27 @@ class StudyTests(unittest.TestCase):
         self.assertEqual(len(questions), 5)
         for item in questions:
             self.assertEqual(len(item["options"]), 4)
-            self.assertIn(item["options"][item["answer_index"]], sources[item["source_id"]].text)
+            # The keyed option must fill the blank back into the source sentence.
+            filled = item["question"].replace("_____", item["options"][item["answer_index"]], 1)
+            self.assertIn(filled, sources[item["source_id"]].text)
             self.assertEqual(item["page"], sources[item["source_id"]].page)
             self.assertIn("_____", item["question"])
             self.assertFalse(item["question"].startswith("Which term"))
 
     def test_quiz_answer_positions_and_distractors_vary(self):
         passages = extract_passages(study_pdf())
-        positions, first_distractors = set(), set()
+        first_positions, first_distractors = set(), set()
         for seed in range(20):
             questions = generate_quiz(passages, random.Random(seed))
-            for item in questions:
-                positions.add(item["answer_index"])
             first = questions[0]
+            first_positions.add(first["answer_index"])
             first_distractors.add(
                 frozenset(
                     first["options"][: first["answer_index"]]
                     + first["options"][first["answer_index"] + 1 :]
                 )
             )
-        self.assertEqual(positions, {0, 1, 2, 3})
+        self.assertEqual(first_positions, {0, 1, 2, 3})
         self.assertGreater(len(first_distractors), 1)
 
     def test_quiz_rejects_insufficient_material(self):
