@@ -162,8 +162,8 @@ its reasoning in it).
 Do this a few days before 11/30, so there is time to fix problems.
 
 1. Health: `https://<STAGING_HOST>/health` answers `{"status": "ok"}`.
-2. One full flow on staging: upload a PDF, ask one question, make a quiz, and submit it. Reload the page,
-   click Use next to the PDF, and check that Scores by topic still shows the result.
+2. One full flow on staging: upload a PDF, ask one question, make a quiz, and submit it. Reload the page
+   and check that the PDF is still selected and Scores by topic still shows the result.
 3. Backup: run `./scripts/backup_staging.sh` on the server and copy the file off with `scp`.
 4. Cost:
    - DigitalOcean Billing page: check this month's usage so far.
