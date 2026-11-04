@@ -75,8 +75,9 @@ For frontend and generator integration:
   `topic_scores`. IDs are 32 lowercase hexadecimal characters. Use `null` for
   unanswered questions and include one entry per question. Client-supplied keys
   and scores are ignored.
-- `GET /api/progress?learner_id=...&document_id=...` returns only aggregated
-  `topic_scores`; omit `document_id` for all that browser's PDFs. It does not
+- `GET /api/progress?document_id=...` with the header `X-Learner-Id: ...` returns
+  only aggregated `topic_scores`; omit `document_id` for all that browser's PDFs.
+  The learner ID goes in the header, not the URL, so it stays out of request logs. It does not
   return attempt bodies or answer keys. It scans the immutable saved attempts
   without holding the submit lock; a concurrent new attempt may appear on the
   next read. No new cache or database is required.
@@ -324,7 +325,7 @@ model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
 | `POST /api/ask` | Accept `document_id` and `question`; return answer and source passages |
 | `POST /api/quiz` | Accept `document_id`; return `quiz_id` and five public questions with options and source IDs/pages, without answer keys or excerpts |
 | `POST /api/quiz/submit` | Accept `quiz_id`, `learner_id`, and `answers`; grade and persist one attempt, then return scores and source-linked feedback |
-| `GET /api/progress` | Accept `learner_id` and optional `document_id` query parameters; return only aggregated `topic_scores` |
+| `GET /api/progress` | Accept the `X-Learner-Id` header and an optional `document_id` query parameter; return only aggregated `topic_scores` |
 
 The PDF limit is 12 MiB. Invalid JSON and fields return 400, missing routes or
 documents return 404, oversized uploads return 413, storage failures return 500,

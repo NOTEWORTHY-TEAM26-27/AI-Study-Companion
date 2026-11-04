@@ -92,8 +92,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/progress":
             params = parse_qs(urlsplit(self.path).query)
             try:
+                # The learner ID comes in a header so it stays out of URLs and request logs.
                 progress = self.server.attempts.progress(
-                    params.get("learner_id", [None])[0], params.get("document_id", [None])[0]
+                    self.headers.get("X-Learner-Id"), params.get("document_id", [None])[0]
                 )
                 self._json(200, progress)
             except ValueError as exc:

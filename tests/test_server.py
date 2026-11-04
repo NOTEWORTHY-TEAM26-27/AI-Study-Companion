@@ -133,12 +133,12 @@ class ServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual((result["correct"], result["total"], result["score"]), (4, 5, 80))
-        status, content = self.request("/api/progress?learner_id=" + "a" * 32)
+        status, content = self.request("/api/progress", headers={"X-Learner-Id": "a" * 32})
         self.assertEqual(status, 200)
         self.assertEqual(
             json.loads(content), {"topic_scores": {"Page 1": {"correct": 4, "total": 5}}}
         )
-        status, content = self.request("/api/progress?learner_id=" + "b" * 32)
+        status, content = self.request("/api/progress", headers={"X-Learner-Id": "b" * 32})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(content), {"topic_scores": {}})
         self.assertEqual(self.prompts, [])
@@ -180,6 +180,9 @@ class ServerTests(unittest.TestCase):
         status, content = self.request("/api/progress")
         self.assertEqual(status, 400)
         self.assertIn("error", json.loads(content))
+        # The ID is read only from the header, never from the URL.
+        status, content = self.request("/api/progress?learner_id=" + "a" * 32)
+        self.assertEqual(status, 400)
 
     def test_failed_quiz_submission_reports_error_and_retry_saves_once(self):
         _, quiz = self.post("/api/quiz", {"document_id": self.upload()})

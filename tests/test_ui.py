@@ -68,7 +68,8 @@ const context = {
     if (path === '/api/documents') return {ok: true, json: async () => ({documents: server.documents})};
     if (path.startsWith('/api/progress?')) {
       const params = new URL('http://local' + path).searchParams;
-      assert.equal(params.get('learner_id'), 'a'.repeat(32));
+      assert.equal(params.get('learner_id'), null);
+      assert.equal(options.headers['X-Learner-Id'], 'a'.repeat(32));
       if (server.pendingProgress) {
         const pending = server.pendingProgress; server.pendingProgress = null;
         await pending;
