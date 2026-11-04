@@ -1,3 +1,4 @@
+import random
 import unittest
 
 from noteworthy_app.core import build_prompt, extract_passages, retrieve
@@ -37,6 +38,23 @@ class StudyTests(unittest.TestCase):
             self.assertEqual(item["page"], sources[item["source_id"]].page)
             self.assertIn("_____", item["question"])
             self.assertFalse(item["question"].startswith("Which term"))
+
+    def test_quiz_answer_positions_and_distractors_vary(self):
+        passages = extract_passages(study_pdf())
+        positions, first_distractors = set(), set()
+        for seed in range(20):
+            questions = generate_quiz(passages, random.Random(seed))
+            for item in questions:
+                positions.add(item["answer_index"])
+            first = questions[0]
+            first_distractors.add(
+                frozenset(
+                    first["options"][: first["answer_index"]]
+                    + first["options"][first["answer_index"] + 1 :]
+                )
+            )
+        self.assertEqual(positions, {0, 1, 2, 3})
+        self.assertGreater(len(first_distractors), 1)
 
     def test_quiz_rejects_insufficient_material(self):
         with self.assertRaisesRegex(ValueError, "at least five"):
