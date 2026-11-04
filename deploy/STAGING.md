@@ -86,6 +86,59 @@ docker compose -f compose.yaml -f compose.staging.yaml down
 
 Uploaded documents live in the `documents` Docker volume and survive redeploys.
 
+## Backups (SCRUM-105)
+
+There is no database yet. Uploaded PDFs, issued quizzes, and saved quiz attempts are files in the
+`documents` volume, at `/data/documents` in the app container. Nothing backs them up automatically.
+
+Take a backup as `deploy` while the app is running:
+
+```bash
+cd ~/noteworthy
+./scripts/backup_staging.sh
+```
+
+The script saves `~/backups/noteworthy-documents-<UTC time>.tar.gz`, checks that the archive reads
+back, and prints how many documents, quizzes, and attempts it holds. It only reads the volume and
+never deletes old backups. Delete old ones by hand when they are no longer needed.
+
+Copy each backup off the server. On your own computer, run the `scp` line the script prints:
+
+```bash
+scp deploy@<STAGING_HOST>:backups/noteworthy-documents-<UTC time>.tar.gz .
+```
+
+Before a big change, such as a Droplet resize or a change to how files are saved, you can also take a
+snapshot of the whole Droplet: open the Droplet in DigitalOcean, then Backups & Snapshots, Take snapshot.
+DigitalOcean recommends turning the Droplet off first for a consistent copy, so staging is down until it
+is back on (https://docs.digitalocean.com/products/snapshots/how-to/snapshot-droplets/, checked
+November 2, 2026). A snapshot costs $0.06 per GB of snapshot size per month while it is kept
+(https://docs.digitalocean.com/products/snapshots/details/pricing/, checked November 2, 2026).
+Delete it once the change works.
+
+To restore a backup:
+
+1. Make sure the app is running. On a new Droplet, run `./scripts/deploy_staging.sh` first.
+2. Run `./scripts/backup_staging.sh` so the current files are not lost. This also creates `~/backups`.
+3. If the backup you need is not on the server, copy it there from your own computer:
+
+   ```bash
+   scp noteworthy-documents-<UTC time>.tar.gz deploy@<STAGING_HOST>:backups/
+   ```
+4. Unpack it into the volume, then restart the app. The app loads documents only when it starts.
+
+   ```bash
+   cd ~/noteworthy
+   gunzip -c ~/backups/noteworthy-documents-<UTC time>.tar.gz \
+     | docker compose -f compose.yaml -f compose.staging.yaml exec -T app tar -C /data/documents -xf -
+   docker compose -f compose.yaml -f compose.staging.yaml restart app
+   ```
+5. Open `https://<STAGING_HOST>/api/documents` and check that it lists the restored documents. The web
+   page itself lists only documents uploaded from that browser.
+
+A restore adds the files in the backup and replaces files with the same name. Files saved after the
+backup stay.
+
 ## Model answers on staging
 
 Staging uses DigitalOcean serverless inference (`AI_PROVIDER=digitalocean`, model `openai-gpt-oss-120b`
@@ -103,3 +156,17 @@ A 503 answer names the HTTP status from DigitalOcean. `(HTTP 401)` or `(HTTP 403
 wrong, does not include the model, or the account tier does not allow the model. A 503 that says the answer
 was cut off means the reply used the whole limit (`DIGITALOCEAN_MAX_TOKENS`, default 4,096; gpt-oss counts
 its reasoning in it).
+
+## Before the Gate Review (11/30)
+
+Do this a few days before 11/30, so there is time to fix problems.
+
+1. Health: `https://<STAGING_HOST>/health` answers `{"status": "ok"}`.
+2. One full flow on staging: upload a PDF, ask one question, make a quiz, and submit it. Reload the page
+   and check that the PDF is still selected and Scores by topic still shows the result.
+3. Backup: run `./scripts/backup_staging.sh` on the server and copy the file off with `scp`.
+4. Cost:
+   - DigitalOcean Billing page: check this month's usage so far.
+   - Model balance: the prepaid Inference and Agents balance must cover the demo. At $0 the model
+     stops and answers fail until more is added.
+   - Spend alert: Billing, Spend alerts. The $20 monthly alert is still set.
