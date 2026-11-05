@@ -207,7 +207,7 @@
     const requestId = ++scoreRequest;
     $('topicScores').textContent = 'Loading saved scores…';
     try {
-      const response = await fetch(`/api/progress?learner_id=${learnerId}&document_id=${encodeURIComponent(documentId)}`);
+      const response = await fetch(`/api/progress?document_id=${encodeURIComponent(documentId)}`, {headers: {'X-Learner-Id': learnerId}});
       if (!response.ok) throw new Error('Could not load saved scores.');
       const progress = await response.json();
       if (requestId === scoreRequest && selectedDocument && selectedDocument.id === documentId) showScores(progress.topic_scores);
