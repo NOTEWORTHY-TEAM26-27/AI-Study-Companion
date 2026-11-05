@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import re
+from collections.abc import Callable
 
 from .core import STOPWORDS, WORD, Passage
 
@@ -39,25 +40,34 @@ def _candidates(passages: list[Passage]) -> list[tuple[Passage, str, str]]:
     return result
 
 
-def generate_quiz(passages: list[Passage], rng: random.Random | None = None) -> list[dict]:
+def generate_quiz(
+    passages: list[Passage],
+    rng: random.Random | None = None,
+    skip: Callable[[str], bool] | None = None,
+    avoid: Callable[[str], bool] | None = None,
+) -> list[dict]:
+    """Build up to five questions, leaving out sentences that skip() rejects and wrong
+    options that avoid() rejects."""
     rng = rng or random.SystemRandom()
     candidates = _candidates(passages)
     if len(candidates) < 5:
         raise ValueError("The PDF needs at least five complete statements for a quiz.")
+    # Skipped sentences still supply distractors through the pool below.
+    usable = [candidate for candidate in candidates if not (skip and skip(candidate[1]))]
     selected = []
     seen_pages = set()
-    for candidate in candidates:
+    for candidate in usable:
         if candidate[0].page not in seen_pages:
             selected.append(candidate)
             seen_pages.add(candidate[0].page)
         if len(selected) == 5:
             break
-    for candidate in candidates:
+    for candidate in usable:
         if len(selected) == 5:
             break
         if candidate not in selected:
             selected.append(candidate)
-    pool = [candidate[2] for candidate in candidates]
+    pool = [candidate[2] for candidate in candidates if not (avoid and avoid(candidate[2]))]
     questions = []
     for passage, sentence, answer in selected:
         # _candidates keeps answers unique ignoring case, so this needs no duplicate check.
