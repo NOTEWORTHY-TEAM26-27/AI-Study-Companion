@@ -472,6 +472,8 @@ class QuestionGeneratorTests(unittest.TestCase):
                 "The war lasted 19141918 in Europe",
                 False,
             ),
+            ("We found x1 = \u22121 and x2 = 3 here", "We found x1 = 1 and x2 = 3 here", False),
+            ("Levels of CO2 rose by .2 percent", "Levels of CO2 rose by 2 percent", False),
             ("Read pages 10\u201320 before class", "Read pages 10-20 before class", True),
             (
                 "The war lasted 1914\u2013 1918 in Europe",

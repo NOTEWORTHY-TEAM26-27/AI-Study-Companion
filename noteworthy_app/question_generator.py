@@ -63,14 +63,20 @@ def _span(passage: Passage, part: list[str]) -> tuple[set[tuple[str, ...]], str]
     return {sentences[index] for index in covered}, " ".join(raw[index] for index in covered)
 
 
-def _numbers(text: str, pdf: bool = False) -> set[str]:
+def _numbers(text: str) -> set[str]:
     # pypdf flattens a power: 10^8 in the excerpt is 108 in the PDF text.
-    text = re.sub(r"(\d)\^(?=\d)", r"\1", _normalize(text))
-    numbers = set(NUMBER.findall(text))
-    if pdf:
-        # PDF text can run a word into a number (in2020); the model may add the space.
-        numbers |= set(re.findall(r"(?<=[^\W\d_])\d+(?:[.,]\d+)*", text))
-    return numbers
+    return set(NUMBER.findall(re.sub(r"(\d)\^(?=\d)", r"\1", _normalize(text))))
+
+
+def _same_numbers(excerpt: str, pdf_text: str) -> bool:
+    """Whether every number in the excerpt is in the PDF text with the same sign and decimals."""
+    allowed = _numbers(pdf_text)
+    # PDF text can run a word into a number (in2020) where the model writes "in 2020". Match
+    # those only after the same word, so the 1 in x1 never stands in for a dropped -1.
+    joined = set(re.findall(r"([^\W\d_]+)(\d+(?:[.,]\d+)*)", _normalize(pdf_text)))
+    spaced = re.findall(r"([^\W\d_]+) (\d+(?:[.,]\d+)*)", _normalize(excerpt))
+    allowed |= {number for word, number in spaced if (word, number) in joined}
+    return _numbers(excerpt) <= allowed
 
 
 def _in_text(key: str, text: str) -> bool:
@@ -174,7 +180,7 @@ def _check(item, passages: list[Passage], rng: random.Random):
         return None
     sentences, pdf_text = _span(source, excerpt_words)
     # Matching ignores signs and decimal points, so check the excerpt's numbers against the PDF.
-    if not _numbers(excerpt) <= _numbers(pdf_text, pdf=True):
+    if not _same_numbers(excerpt, pdf_text):
         return None
     # Keys keep the model's text; grading normalizes quotes, hyphens and case on both sides.
     choices, answer = {}, item.get("answer")
