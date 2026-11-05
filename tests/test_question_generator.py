@@ -452,6 +452,66 @@ class QuestionGeneratorTests(unittest.TestCase):
             with self.subTest(changed=sentence):
                 self.assertIsNone(self.kept_alone(sentence, item))
 
+    def test_excerpt_numbers_must_match_the_pdf_as_written(self):
+        tail = " was written in the course notes for review."
+        # (PDF text, model excerpt, kept)
+        cases = [
+            ("The low was -40 degrees", "The low was 40 degrees", False),
+            ("The low was \u221240 degrees", "The low was 40 degrees", False),
+            ("The rate was 1.25 percent", "The rate was 12.5 percent", False),
+            ("It cost 1,500 dollars", "It cost 1.500 dollars", False),
+            (
+                "The correlation was r = \u2212.45 overall",
+                "The correlation was r = .45 overall",
+                False,
+            ),
+            ("The correlation was r = .45 overall", "The correlation was r = -.45 overall", False),
+            ("The error is below 10\u22126 meters", "The error is below 10^6 meters", False),
+            (
+                "The war lasted 1914\u2013 1918 in Europe",
+                "The war lasted 19141918 in Europe",
+                False,
+            ),
+            ("Read pages 10\u201320 before class", "Read pages 10-20 before class", True),
+            (
+                "The war lasted 1914\u2013 1918 in Europe",
+                "The war lasted 1914\u20131918 in Europe",
+                True,
+            ),
+            ("Cases of COVID- 19 rose in spring", "Cases of COVID-19 rose in spring", True),
+            ("Sales fell by \u22123.5% last year", "Sales fell by -3.5% last year", True),
+            ("The net loss was (1,200) dollars", "The net loss was (1,200) dollars", True),
+            (
+                "There are 6.02 \u00d7 1023 atoms per mole",
+                "There are 6.02 \u00d7 10^23 atoms per mole",
+                True,
+            ),
+            (
+                "Light moves at 3 \u00d7 108 m/s in vacuum",
+                "Light moves at 3 \u00d7 10^8 m/s in vacuum",
+                True,
+            ),
+            ("The error is below 10\u22126 meters", "The error is below 10^-6 meters", True),
+            ("The law passed in2020 after debate", "The law passed in 2020 after debate", True),
+            ("The town had2,000 people", "The town had 2,000 people", True),
+            (
+                "The result was significant, p < .05 in all trials",
+                "The result was significant, p < .05 in all trials",
+                True,
+            ),
+        ]
+        for pdf, excerpt, kept in cases:
+            item = {
+                "type": "True/False",
+                "question": "This statement is true.",
+                "choices": {},
+                "answer": "True",
+                "source_page": 2,
+                "source_excerpt": excerpt + tail,
+            }
+            with self.subTest(excerpt):
+                self.assertEqual(self.kept_alone(pdf + tail, item) is not None, kept)
+
     def test_reworded_blank_is_kept_when_its_key_is_the_pdf_word(self):
         items = model_questions()
         items[4] = {**items[4], "question": "Plants use chlorophyll to absorb _____ energy."}

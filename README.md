@@ -119,9 +119,9 @@ Questions, options and keys keep the model's text, so symbols such as `10⁻⁶`
 shown as written. Multiple-choice options are shuffled so the key is not always the
 same letter. If the model is unavailable, or fewer than eight questions pass, the
 quiz is topped up with up to five cloze questions from `quiz.py` on sentences the
-model questions did not use, and no cloze question shows a fill-in-the-blank or short-answer key,
-so quizzes still work without a model. Each quiz costs one model call;
-tests use a fake model.
+model questions did not use, and no cloze question shows a fill-in-the-blank or
+short-answer key, so quizzes still work without a model. Each quiz costs one model
+call; tests use a fake model.
 
 ## Local setup
 
