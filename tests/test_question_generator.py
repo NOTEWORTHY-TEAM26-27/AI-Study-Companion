@@ -474,6 +474,12 @@ class QuestionGeneratorTests(unittest.TestCase):
             ),
             ("We found x1 = \u22121 and x2 = 3 here", "We found x1 = 1 and x2 = 3 here", False),
             ("Levels of CO2 rose by .2 percent", "Levels of CO2 rose by 2 percent", False),
+            (
+                "The law was passedin2020 after debate",
+                "The law was passed in 2020 after debate",
+                True,
+            ),
+            ("The townhad2,000 people", "The town had 2,000 people", True),
             ("Read pages 10\u201320 before class", "Read pages 10-20 before class", True),
             (
                 "The war lasted 1914\u2013 1918 in Europe",

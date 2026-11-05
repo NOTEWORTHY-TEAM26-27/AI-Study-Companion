@@ -71,11 +71,16 @@ def _numbers(text: str) -> set[str]:
 def _same_numbers(excerpt: str, pdf_text: str) -> bool:
     """Whether every number in the excerpt is in the PDF text with the same sign and decimals."""
     allowed = _numbers(pdf_text)
-    # PDF text can run a word into a number (in2020) where the model writes "in 2020". Match
-    # those only after the same word, so the 1 in x1 never stands in for a dropped -1.
-    joined = set(re.findall(r"([^\W\d_]+)(\d+(?:[.,]\d+)*)", _normalize(pdf_text)))
+    # PDF text can run words into a number (in2020, passedin2020) where the model writes
+    # "in 2020". Match those only when the glued letters end with the excerpt's word, so the
+    # 1 in x1 never stands in for a dropped -1.
+    joined = re.findall(r"([^\W\d_]+)(\d+(?:[.,]\d+)*)", _normalize(pdf_text))
     spaced = re.findall(r"([^\W\d_]+) (\d+(?:[.,]\d+)*)", _normalize(excerpt))
-    allowed |= {number for word, number in spaced if (word, number) in joined}
+    allowed |= {
+        number
+        for word, number in spaced
+        if any(glued == number and letters.endswith(word) for letters, glued in joined)
+    }
     return _numbers(excerpt) <= allowed
 
 
