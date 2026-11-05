@@ -118,8 +118,12 @@ class ServerTests(unittest.TestCase):
         self.assertIn("quiz_id", quiz)
         for question in quiz["questions"]:
             self.assertEqual(set(question), {"question", "options", "source_id", "page", "topic"})
-        # Hand-checked keys for study_pdf are 0,1,2,3,0. Deliberately miss the first.
-        answers = [1, 1, 2, 3, 0]
+        # Keys are random, so read them from the saved quiz. Deliberately miss the first.
+        saved = json.loads(
+            (self.data_dir / "quizzes" / f"{quiz['quiz_id']}.json").read_text(encoding="utf-8")
+        )
+        keys = [question["answer_index"] for question in saved["questions"]]
+        answers = [(keys[0] + 1) % 4, *keys[1:]]
         status, result = self.post(
             "/api/quiz/submit",
             {

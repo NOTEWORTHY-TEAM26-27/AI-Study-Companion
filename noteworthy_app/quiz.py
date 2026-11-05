@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 
 from .core import STOPWORDS, WORD, Passage
@@ -38,7 +39,8 @@ def _candidates(passages: list[Passage]) -> list[tuple[Passage, str, str]]:
     return result
 
 
-def generate_quiz(passages: list[Passage]) -> list[dict]:
+def generate_quiz(passages: list[Passage], rng: random.Random | None = None) -> list[dict]:
+    rng = rng or random.SystemRandom()
     candidates = _candidates(passages)
     if len(candidates) < 5:
         raise ValueError("The PDF needs at least five complete statements for a quiz.")
@@ -57,19 +59,14 @@ def generate_quiz(passages: list[Passage]) -> list[dict]:
             selected.append(candidate)
     pool = [candidate[2] for candidate in candidates]
     questions = []
-    for index, (passage, sentence, answer) in enumerate(selected):
-        distractors = []
-        for possible in pool:
-            if possible.lower() != answer.lower() and possible.lower() not in {
-                d.lower() for d in distractors
-            }:
-                distractors.append(possible)
-            if len(distractors) == 3:
-                break
-        if len(distractors) < 3:
+    for passage, sentence, answer in selected:
+        # _candidates keeps answers unique ignoring case, so this needs no duplicate check.
+        others = [possible for possible in pool if possible.lower() != answer.lower()]
+        if len(others) < 3:
             raise ValueError("The PDF needs more distinct terms for a quiz.")
-        answer_index = index % 4
-        options = distractors.copy()
+        # Random distractors and key position, so the answer is not the odd one out or a fixed letter.
+        options = rng.sample(others, 3)
+        answer_index = rng.randrange(4)
         options.insert(answer_index, answer)
         questions.append(
             {
