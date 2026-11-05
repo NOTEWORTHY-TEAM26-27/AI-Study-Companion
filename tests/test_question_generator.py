@@ -399,6 +399,59 @@ class QuestionGeneratorTests(unittest.TestCase):
         reply = model_reply([decimal]).replace('"NUMBER"', "0.50")
         self.assertEqual(self.kept_alone(text, None, reply)["answer"], "0.50")
 
+    def test_numbers_inside_words_and_formulas_do_not_reject_exact_excerpts(self):
+        sentences = [
+            "Steam engines spread quickly in the late 18th century across Britain.",
+            "The discriminant of the quadratic is b^2 - 4ac for every equation.",
+            "The circumference of a circle with radius r is 2\u03c0r in all cases.",
+            "Researchers grew the cells in the 3D culture for two full weeks.",
+            "Burning hydrogen with oxygen will give 2H2O as the only product.",
+            "The oxidation state of magnesium in MgO is +2 in this compound.",
+            "The line passes through the point (3,-4) on the coordinate plane.",
+        ]
+        for sentence in sentences:
+            item = {
+                "type": "True/False",
+                "question": "This statement is true.",
+                "choices": {},
+                "answer": "True",
+                "source_page": 2,
+                "source_excerpt": sentence,
+            }
+            with self.subTest(sentence):
+                self.assertIsNotNone(self.kept_alone(sentence, item))
+        changed = {
+            "The oxidation state of magnesium in MgO is +2 in this compound.": "-2",
+            "The line passes through the point (3,-4) on the coordinate plane.": "4",
+        }
+        # The prompt asks for x^2, but pypdf writes a superscript as plain x2.
+        power = {
+            "type": "True/False",
+            "question": "This statement is true.",
+            "choices": {},
+            "answer": "True",
+            "source_page": 2,
+            "source_excerpt": "The area of a square with side x is x^2 square units.",
+        }
+        pdf = "The area of a square with side x is x2 square units."
+        self.assertIsNotNone(self.kept_alone(pdf, power))
+        # A dropped plus sign changes the number too.
+        magnesium = "The oxidation state of magnesium in MgO is +2 in this compound."
+        dropped = {**power, "source_excerpt": magnesium.replace("+2", "2")}
+        self.assertIsNone(self.kept_alone(magnesium, dropped))
+        for sentence, number in changed.items():
+            original = "+2" if "+2" in sentence else "-4"
+            item = {
+                "type": "True/False",
+                "question": "This statement is true.",
+                "choices": {},
+                "answer": "True",
+                "source_page": 2,
+                "source_excerpt": sentence.replace(original, number),
+            }
+            with self.subTest(changed=sentence):
+                self.assertIsNone(self.kept_alone(sentence, item))
+
     def test_reworded_blank_is_kept_when_its_key_is_the_pdf_word(self):
         items = model_questions()
         items[4] = {**items[4], "question": "Plants use chlorophyll to absorb _____ energy."}

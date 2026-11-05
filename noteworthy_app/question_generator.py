@@ -26,8 +26,9 @@ QUIZ_SIZE = PER_TYPE * len(QUESTION_TYPES)
 MAX_PASSAGES = 8
 MIN_EXCERPT_WORDS = 5
 BLANK = "_____"
-# A number as written, with its sign and decimals; x1 and b2 are names, not numbers.
-NUMBER = re.compile(r"(?<![\w.])-?\d+(?:[.,]\d+)*")
+# A number as written, with its sign and decimals. Digits after a letter, a control
+# character or ^ (x1, b2, x^2) are part of a name or power, not a number.
+NUMBER = re.compile(r"(?<![\w.\x00-\x1f^])[+-]?\d+(?:[.,]\d+)*")
 LABELS = ("A", "B", "C", "D")
 
 
@@ -60,6 +61,10 @@ def _span(passage: Passage, part: list[str]) -> tuple[set[tuple[str, ...]], str]
         return set(), ""
     covered = sorted(set(owners[start : start + len("".join(part))]))
     return {sentences[index] for index in covered}, " ".join(raw[index] for index in covered)
+
+
+def _numbers(text: str) -> set[str]:
+    return set(NUMBER.findall(re.sub(r"(\w)- (\w)", r"\1\2", _normalize(text))))
 
 
 def _in_text(key: str, text: str) -> bool:
@@ -163,7 +168,7 @@ def _check(item, passages: list[Passage], rng: random.Random):
         return None
     sentences, pdf_text = _span(source, excerpt_words)
     # Matching ignores signs and decimal points, so check the excerpt's numbers against the PDF.
-    if not all(_in_text(number, pdf_text) for number in NUMBER.findall(_normalize(excerpt))):
+    if not _numbers(excerpt) <= _numbers(pdf_text):
         return None
     # Keys keep the model's text; grading normalizes quotes, hyphens and case on both sides.
     choices, answer = {}, item.get("answer")

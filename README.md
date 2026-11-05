@@ -104,7 +104,8 @@ generator was adapted from `research/question_generation`. The server keeps a mo
 question only if:
 
 - its excerpt is copied from a passage it was given, on the page it names (case,
-  punctuation, quote style, spacing and words split at a line end are ignored);
+  punctuation, quote style, spacing and words split at a line end are ignored, but
+  numbers must keep the PDF's signs and decimal points);
 - no earlier question in the quiz uses the same sentence, and no question shows
   another question's typed answer in its text or options;
 - a multiple-choice question has four different options A to D and a letter key;
@@ -117,8 +118,8 @@ question only if:
 Questions, options and keys keep the model's text, so symbols such as `10⁻⁶` are
 shown as written. Multiple-choice options are shuffled so the key is not always the
 same letter. If the model is unavailable, or fewer than eight questions pass, the
-quiz is filled with cloze questions from `quiz.py` on sentences the model questions
-did not use, and no cloze question shows a fill-in-the-blank or short-answer key,
+quiz is topped up with up to five cloze questions from `quiz.py` on sentences the
+model questions did not use, and no cloze question shows a fill-in-the-blank or short-answer key,
 so quizzes still work without a model. Each quiz costs one model call;
 tests use a fake model.
 
