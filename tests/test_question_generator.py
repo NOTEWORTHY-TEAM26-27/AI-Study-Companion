@@ -480,6 +480,11 @@ class QuestionGeneratorTests(unittest.TestCase):
                 True,
             ),
             ("The townhad2,000 people", "The town had 2,000 people", True),
+            (
+                "Water has a density of 1000 kg m −3, or 1 g per cm3 when warm",
+                "Water has a density of 1000 kg m 3, or 1 g per cm3 when warm",
+                False,
+            ),
             ("Read pages 10\u201320 before class", "Read pages 10-20 before class", True),
             (
                 "The war lasted 1914\u2013 1918 in Europe",

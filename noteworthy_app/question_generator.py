@@ -72,15 +72,15 @@ def _same_numbers(excerpt: str, pdf_text: str) -> bool:
     """Whether every number in the excerpt is in the PDF text with the same sign and decimals."""
     allowed = _numbers(pdf_text)
     # PDF text can run words into a number (in2020, passedin2020) where the model writes
-    # "in 2020". Match those only when the glued letters end with the excerpt's word, so the
-    # 1 in x1 never stands in for a dropped -1.
+    # "in 2020". Match those only when the excerpt's text before the number, without spaces,
+    # ends with all the glued letters, so the 1 in x1 or the 3 in cm3 never stands in for a
+    # dropped minus elsewhere.
     joined = re.findall(r"([^\W\d_]+)(\d+(?:[.,]\d+)*)", _normalize(pdf_text))
-    spaced = re.findall(r"([^\W\d_]+) (\d+(?:[.,]\d+)*)", _normalize(excerpt))
-    allowed |= {
-        number
-        for word, number in spaced
-        if any(glued == number and letters.endswith(word) for letters, glued in joined)
-    }
+    text = _normalize(excerpt)
+    for match in re.finditer(r"[^\W\d_] (\d+(?:[.,]\d+)*)", text):
+        before = re.sub(r"\W", "", text[: match.start(1)])
+        if any(glued == match[1] and before.endswith(letters) for letters, glued in joined):
+            allowed.add(match[1])
     return _numbers(excerpt) <= allowed
 
 
