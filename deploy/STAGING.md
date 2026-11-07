@@ -159,7 +159,8 @@ was cut off means the reply used the whole limit (`DIGITALOCEAN_MAX_TOKENS`, def
 its reasoning in it).
 
 A quiz never returns 503. If its model call fails or no question passes the checks, the quiz has only the
-five cloze multiple-choice questions, and the app log has a warning. To see it, run
+five cloze multiple-choice questions, and the app log has a warning. A PDF with fewer than five full
+statements, such as slides that are mostly formulas or diagrams, then shows an error instead. To see it, run
 `docker compose -f compose.yaml -f compose.staging.yaml logs app | grep "model questions\|Question model"`.
 
 ## Before the Gate Review (11/30)

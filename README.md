@@ -99,15 +99,17 @@ This does not award semantic or partial credit or make model calls.
 
 `POST /api/quiz` asks the configured model once for three questions of each format
 (multiple choice, true/false, fill-in-the-blank, short answer) from up to eight
-passages, spread over as many pages as possible, and keeps up to two of each. The
-generator was adapted from `research/question_generation`. The server keeps a model
-question only if:
+passages, spread over as many pages as possible, and keeps up to two of each. If
+fewer than eight pass, spare questions of any format fill the gap. Passages with a
+full statement are sent first; title slides, tables and figure labels only fill the
+slots that are left. The generator was adapted from `research/question_generation`.
+The server keeps a model question only if:
 
 - its excerpt is copied from a passage it was given, on the page it names (case,
   punctuation, quote style, spacing and words split at a line end are ignored, but
   numbers must keep the PDF's signs and decimal points);
-- no earlier question in the quiz uses the same sentence, and no question shows
-  another question's typed answer in its text or options;
+- no earlier question in the quiz uses the same sentence or slide bullet point, and
+  no question shows another question's typed answer in its text or options;
 - a multiple-choice question has four different options A to D and a letter key;
 - a fill-in-the-blank question has at least five words, and a short answer is one
   to four whole words; neither key appears elsewhere in its own question;
@@ -116,12 +118,18 @@ question only if:
   `1` is not the `1` in `1.5`).
 
 Questions, options and keys keep the model's text, so symbols such as `10⁻⁶` are
-shown as written. Multiple-choice options are shuffled so the key is not always the
-same letter. If the model is unavailable, or fewer than eight questions pass, the
-quiz is topped up with up to five cloze questions from `quiz.py` on sentences the
-model questions did not use, and no cloze question shows a fill-in-the-blank or
-short-answer key, so quizzes still work without a model. Each quiz costs one model
-call; tests use a fake model.
+shown as written. Control characters, symbol-font bullets and a leading bullet are
+removed, and a question with any other unmapped font symbol is left out.
+Multiple-choice options are shuffled so the key is not always the same letter. If the model is unavailable, or
+fewer than eight questions pass, the quiz is topped up with up to five cloze
+questions from `quiz.py` on sentences the model questions did not use, and no cloze
+question shows a fill-in-the-blank or short-answer key, so quizzes still work
+without a model. Cloze questions use only full statements: a
+sentence or slide bullet point that starts and ends like one, with no link, unmapped
+font glyph, unmatched bracket, slide number or cut-off end, and that is not mostly
+capitalized words (titles, names) or numbers (tables). A slide label such as `Note:`
+is never the key, but a defined term such as `Kernel:` can be. Each quiz costs one
+model call; tests use a fake model.
 
 ## Local setup
 

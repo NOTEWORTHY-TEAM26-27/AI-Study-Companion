@@ -6,6 +6,11 @@ import json
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from noteworthy_app.core import Passage
+
+# The bullet pypdf gives for a symbol-font slide bullet.
+BULLET = "\uf0a7"
+
 
 def study_pdf():
     statements = [
@@ -125,6 +130,51 @@ def model_questions():
             "source_excerpt": "Vacuoles store water and nutrients that plant cells need later.",
         },
     ]
+
+
+def slide_passages():
+    """Slide text as pypdf extracts it: symbol-font bullets, no periods, slide numbers."""
+    b = BULLET
+    return [
+        Passage(
+            "p1-1",
+            1,
+            "BIOL 1441: Cell Biology Cell Structures Professor Jane Doe The University of "
+            "Somewhere [These slides were adapted from A. Smith, with materials from "
+            "http://cells.example.edu.] 1",
+        ),
+        Passage(
+            "p2-1",
+            2,
+            f"Cell Parts {b} Mitochondria release energy from nutrients for the whole cell "
+            f"{b} Ribosomes assemble proteins from amino acids (e.g. enzymes and hormones) "
+            f"{b} Note: the nucleus stores most of the genetic information 2",
+        ),
+        Passage(
+            "p3-1",
+            3,
+            f"Plant Cells {b} Chloroplasts capture light energy for photosynthesis {b} "
+            f"Large vacuoles store water and nutrients for later use {b} Cell walls give plant "
+            "cells a rigid shape 3",
+        ),
+        Passage("p4-1", 4, "Organelle Sizes Nucleus 6 Mitochondria 1 Ribosome 0.02 Vacuole 30 4"),
+        Passage(
+            "p5-1",
+            5,
+            f"Membranes {b} Membranes control which substances enter and leave cells {b} "
+            f"Channels let small charged particles cross the membrane quickly {b} Questions? 5",
+        ),
+    ]
+
+
+SLIDE_STATEMENTS = {
+    "Mitochondria release energy from nutrients for the whole cell",
+    "Ribosomes assemble proteins from amino acids (e.g. enzymes and hormones)",
+    "Chloroplasts capture light energy for photosynthesis",
+    "Large vacuoles store water and nutrients for later use",
+    "Membranes control which substances enter and leave cells",
+    "Channels let small charged particles cross the membrane quickly",
+}
 
 
 def model_reply(questions=None):
