@@ -131,6 +131,24 @@ class GradingTests(unittest.TestCase):
                 self.assertEqual(grade_quiz([item], [wrong])["correct"], 0)
                 self.assertEqual(grade_quiz([item], [key])["correct"], 1)
 
+    def test_smart_punctuation_matches_plain_typing(self):
+        for key, typed in [
+            ("Newton's second law", "Newton’s second law"),
+            ("Newton’s second law", "Newton's second law"),
+            ("x‑axis", "x-axis"),
+            ("−1", "-1"),
+        ]:
+            with self.subTest(key=key):
+                item = {**questions()[3], "answer": key}
+                self.assertEqual(grade_quiz([item], [typed])["correct"], 1)
+
+    def test_blanks_ignore_paired_quotes_and_trailing_punctuation(self):
+        one = {**questions()[2], "answer": "light,"}
+        self.assertEqual(grade_quiz([one], ["light"])["correct"], 1)
+        two = {**questions()[2], "question": "_____ and _____", "answer": ["“gates”", "cells."]}
+        self.assertEqual(grade_quiz([two], [["gates", "Cells"]])["correct"], 1)
+        self.assertEqual(grade_quiz([two], [["gates", "cell"]])["correct"], 0)
+
     def test_empty_or_unknown_question_format_is_rejected(self):
         for items in [[], [{**questions()[0], "type": "Essay"}]]:
             with self.assertRaises(ValueError):

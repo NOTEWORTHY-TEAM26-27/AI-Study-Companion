@@ -2,9 +2,23 @@
 
 import unicodedata
 
+# Phones and PDFs use curly quotes and special hyphens; keyboards type plain ones.
+PLAIN = str.maketrans(
+    {
+        "‘": "'",
+        "’": "'",
+        "“": '"',
+        "”": '"',
+        "‐": "-",
+        "‑": "-",
+        "–": "-",
+        "−": "-",
+    }
+)
+
 
 def _normalize(text: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+    return " ".join(unicodedata.normalize("NFKC", text).translate(PLAIN).casefold().split())
 
 
 def _short_answer(text: str) -> str:
@@ -45,6 +59,8 @@ def grade_quiz(questions: list[dict], answers: list) -> dict:
             correct = answer is not None and answer == expected
         elif kind in {"True/False", "Fill-in-the-Blank", "Short Answer"}:
             expected = display = question["answer"]
+            # Blanks, like short answers, ignore paired quotes and trailing punctuation.
+            normalize = _normalize if kind == "True/False" else _short_answer
             if isinstance(expected, list):
                 if answer is not None and (
                     not isinstance(answer, list)
@@ -52,13 +68,12 @@ def grade_quiz(questions: list[dict], answers: list) -> dict:
                     or any(not isinstance(a, str) or len(a) > 4000 for a in answer)
                 ):
                     raise ValueError("Send a list of text answers for multiple blanks.")
-                correct = answer is not None and [_normalize(a) for a in answer] == [
-                    _normalize(a) for a in expected
+                correct = answer is not None and [normalize(a) for a in answer] == [
+                    normalize(a) for a in expected
                 ]
             else:
                 if answer is not None and (not isinstance(answer, str) or len(answer) > 4000):
                     raise ValueError("Text answers must be strings of at most 4000 characters.")
-                normalize = _short_answer if kind == "Short Answer" else _normalize
                 correct = bool(
                     answer and normalize(answer) and normalize(answer) == normalize(expected)
                 )

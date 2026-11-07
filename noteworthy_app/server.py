@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 from .attempts import AttemptStore
 from .core import build_prompt, extract_passages
 from .models import generate_answer
-from .quiz import generate_quiz
+from .question_generator import generate_questions
 from .search import EmbeddingSearch, KeywordSearch, create_search
 from .storage import load_documents, save_document
 
@@ -161,7 +161,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             passages = document[1]
             if path == "/api/quiz":
-                quiz = self.server.attempts.issue(document_id, generate_quiz(passages))
+                questions = generate_questions(passages, self.server.answer_generator)
+                quiz = self.server.attempts.issue(document_id, questions)
                 # Keep authoritative keys and excerpts on disk until the quiz is submitted.
                 public_questions = [
                     {key: value for key, value in item.items() if key in PUBLIC_QUESTION_FIELDS}

@@ -95,6 +95,14 @@ const context = {
       if (server.askGate) await server.askGate;
       return {ok: true, json: async () => ({answer: 'Answer for ' + body.document_id, sources: []})};
     }
+    if (path === '/api/quiz' && server.quizMode === 'formats') {
+      return {ok: true, json: async () => ({quiz_id: String(++server.quizCount).padStart(32, 'c'), questions: [
+        {type: 'Multiple Choice', question: 'Which?', choices: {A: 'One', B: 'Two', C: 'Three', D: 'Four'}, topic: 'Page 1'},
+        {type: 'True/False', question: 'Cells have walls.', choices: {}, topic: 'Page 1'},
+        {type: 'Fill-in-the-Blank', question: 'Plants use _____ and _____.', choices: {}, topic: 'Page 1'},
+        {type: 'Short Answer', question: 'What absorbs light?', choices: {}, topic: 'Page 1'}
+      ]})};
+    }
     if (path === '/api/quiz') {
       return {ok: true, json: async () => ({quiz_id: String(++server.quizCount).padStart(32, 'c'), questions: [
         {question: 'First?', options: ['Wrong', 'Right'], topic: 'Page 1'},
@@ -106,6 +114,14 @@ const context = {
       if (server.submitGate) await server.submitGate;
       if (server.submitFails) return {ok: false, json: async () => ({error: 'Could not save data.'})};
       server.progress.mine1 = {'Page 1': {correct: 1, total: 2}};
+      if (server.quizMode === 'formats') {
+        return {ok: true, json: async () => ({correct: 3, total: 4, results: [
+          {correct: true, expected_answer: 'Two', source_id: 'p1-1', page: 1},
+          {correct: true, expected_answer: 'False', source_id: 'p1-1', page: 1},
+          {correct: false, expected_answer: ['sunlight', 'water'], source_id: 'p1-2', page: 1},
+          {correct: true, expected_answer: 'Chlorophyll', source_id: 'p1-2', page: 1}
+        ]})};
+      }
       return {ok: true, json: async () => ({correct: 1, total: 2, results: [
         {correct: true, expected_answer: 'Right', source_id: 'p1-1', page: 1},
         {correct: false, expected_answer: 'Right', source_id: 'p1-1', page: 1}
@@ -257,6 +273,32 @@ const scriptSource = fs.readFileSync(0, 'utf8');
   await flush(); await flush();
   assert.equal(choose(0).textContent, 'Selected');
   assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
+
+  // Four-format questions: letters and True/False from radios, text boxes for blanks and short answers.
+  server.quizMode = 'formats';
+  await el('makeQuiz').onclick();
+  const blocks = el('quiz').children;
+  const labels = block => block.children.slice(1);
+  const boxes = block => labels(block).flatMap(label => label.children.filter(node => node.type === 'text'));
+  assert.deepEqual(labels(blocks[0]).map(label => label.children[1]), [' A. One', ' B. Two', ' C. Three', ' D. Four']);
+  assert.deepEqual(labels(blocks[0]).map(label => label.children[0].value), ['A', 'B', 'C', 'D']);
+  assert.deepEqual(labels(blocks[1]).map(label => label.children[0].value), ['True', 'False']);
+  assert.deepEqual(labels(blocks[2]).map(label => label.textContent), ['Question 3, blank 1', 'Question 3, blank 2']);
+  assert.deepEqual(labels(blocks[3]).map(label => label.textContent), ['Answer to question 4']);
+  assert.equal(boxes(blocks[3]).length, 1);
+  selectedAnswers.set(0, {value: 'B'}); selectedAnswers.set(1, {value: 'False'});
+  boxes(blocks[2])[0].value = 'sunlight'; boxes(blocks[2])[1].value = '  ';
+  boxes(blocks[3])[0].value = ' Chlorophyll ';
+  await blocks.at(-1).onclick();
+  assert.deepEqual(server.submissions.at(-1).answers, ['B', 'False', ['sunlight', ''], 'Chlorophyll']);
+  assert.equal(blocks[2].children.at(-1).textContent, 'Answer: sunlight, water · p1-2, page 1');
+  assert.equal(el('quizResult').textContent, 'Score: 3 / 4');
+  // Unanswered questions of every format are sent as null.
+  selectedAnswers.delete(0); selectedAnswers.delete(1);
+  await el('makeQuiz').onclick();
+  await el('quiz').children.at(-1).onclick();
+  assert.deepEqual(server.submissions.at(-1).answers, [null, null, null, null]);
+  server.quizMode = null;
 
   // Documents with the same name are told apart by a short ID.
   vm.runInContext('pendingUploads = []', context);

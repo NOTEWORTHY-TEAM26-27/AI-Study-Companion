@@ -44,8 +44,9 @@ One app runs locally, in Docker, and
 on staging at <https://143-244-212-41.sslip.io>. Prototype integration
 ([SCRUM-56](https://noteworthy-uta.atlassian.net/browse/SCRUM-56)) is still in
 progress: the app now has embedding search from the Sprint 1 RAG test (see
-Passage search), and the question generation and knowledge graph research code
-is in `research/` but not used by the app yet.
+Passage search) and the question generator from `research/question_generation`
+(see Question generation). The knowledge graph research code is in `research/`
+but not used by the app yet.
 
 ## Quiz grading and saved progress (SCRUM-81, SCRUM-83)
 
@@ -86,13 +87,41 @@ The grading function accepts current `options`/`answer_index` questions and the
 shared four-format schema in `research/question_generation/validate_questions.py`.
 For that schema, submit multiple-choice labels (`A`–`D`), `True`/`False` strings,
 and text for blanks and short answers (a list for multiple blanks). Text matching
-normalizes Unicode, case and whitespace, then compares exactly. Short answers
-also ignore paired surrounding quotes and trailing sentence punctuation (`. , : ; ?`).
+normalizes Unicode, curly quotes, hyphen and minus characters, case and whitespace,
+then compares exactly, so a phone's smart punctuation matches plain typing. Blanks
+and short answers also ignore paired surrounding quotes and trailing sentence
+punctuation (`. , : ; ?`).
 Signs, leading decimal points, internal punctuation, primes and factorial `!` stay
 significant: `-1` differs from `1`, `.5` differs from `5`, and `5!` differs from `5`.
-This does not award semantic or partial credit or make model calls. The current page/generator
-still uses five multiple-choice questions; the separate four-format generator
-and quiz-page integration remain their owners' work.
+This does not award semantic or partial credit or make model calls.
+
+## Question generation (SCRUM-84)
+
+`POST /api/quiz` asks the configured model once for three questions of each format
+(multiple choice, true/false, fill-in-the-blank, short answer) from up to eight
+passages, spread over as many pages as possible, and keeps up to two of each. The
+generator was adapted from `research/question_generation`. The server keeps a model
+question only if:
+
+- its excerpt is copied from a passage it was given, on the page it names (case,
+  punctuation, quote style, spacing and words split at a line end are ignored, but
+  numbers must keep the PDF's signs and decimal points);
+- no earlier question in the quiz uses the same sentence, and no question shows
+  another question's typed answer in its text or options;
+- a multiple-choice question has four different options A to D and a letter key;
+- a fill-in-the-blank question has at least five words, and a short answer is one
+  to four whole words; neither key appears elsewhere in its own question;
+- every typed answer (blank or short answer) appears in the PDF sentence exactly as
+  grading reads it, so signs and decimal points match the PDF (`-1` is not `1`, and
+  `1` is not the `1` in `1.5`).
+
+Questions, options and keys keep the model's text, so symbols such as `10⁻⁶` are
+shown as written. Multiple-choice options are shuffled so the key is not always the
+same letter. If the model is unavailable, or fewer than eight questions pass, the
+quiz is topped up with up to five cloze questions from `quiz.py` on sentences the
+model questions did not use, and no cloze question shows a fill-in-the-blank or
+short-answer key, so quizzes still work without a model. Each quiz costs one model
+call; tests use a fake model.
 
 ## Local setup
 
@@ -124,7 +153,7 @@ python -m noteworthy_app.server
 ```
 
 Open <http://127.0.0.1:8000>. Upload a typed PDF to extract its text and generate
-a five-question practice quiz. Answer generation additionally requires Ollama
+a practice quiz. Answer generation additionally requires Ollama
 running at `OLLAMA_URL` with the model named by `OLLAMA_MODEL` available. The
 defaults match the existing prototype. Set `AI_PROVIDER=digitalocean` and
 `DIGITALOCEAN_API_KEY` to use the hosted model instead (staging does this). An
@@ -299,7 +328,8 @@ outside the source checkout. Runtime dependencies are pinned in
 |---|---|
 | `noteworthy_app/core.py` | Typed PDF extraction, keyword retrieval, and cited answer prompts |
 | `noteworthy_app/search.py` | Passage search setting: keyword or embedding search |
-| `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions |
+| `noteworthy_app/question_generator.py` | Model questions in four formats, checked against the PDF, with cloze fallback |
+| `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions (fallback) |
 | `noteworthy_app/grading.py` | Server-side grading for the current and shared four-format question schemas |
 | `noteworthy_app/attempts.py` | Persist issued quizzes and attempts; summarize saved topic scores |
 | `noteworthy_app/models.py` | Ollama and DigitalOcean adapter exposing `generate_answer(prompt) -> str` |
@@ -323,7 +353,7 @@ model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
 | `GET /api/documents` | List current and restored documents (ID, name, passage count, and status) from the configured storage directory |
 | `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID, passage count, and status |
 | `POST /api/ask` | Accept `document_id` and `question`; return answer and source passages |
-| `POST /api/quiz` | Accept `document_id`; return `quiz_id` and five public questions with options and source IDs/pages, without answer keys or excerpts |
+| `POST /api/quiz` | Accept `document_id`; return `quiz_id` and up to eight public questions (type, prompt, options or choices, source IDs/pages), without answer keys or excerpts |
 | `POST /api/quiz/submit` | Accept `quiz_id`, `learner_id`, and `answers`; grade and persist one attempt, then return scores and source-linked feedback |
 | `GET /api/progress` | Accept the `X-Learner-Id` header and an optional `document_id` query parameter; return only aggregated `topic_scores` |
 
@@ -343,8 +373,8 @@ with the reason until the page is reloaded. The page checks the file type and
 the 12 MB limit before uploading. The API itself is not limited to one student
 until accounts are added (SCRUM-116, PBI 20).
 There is no login, per-student isolation, database, OCR, or OneDrive/Canvas
-import yet. The app has embedding search and keeps the existing cloze quiz
-rather than claiming all team prototypes are merged.
+import yet. The app has embedding search and four-format model questions, with
+the cloze quiz as fallback; the knowledge graph research is not in the app yet.
 
 Sprint 2 work under SCRUM-11:
 

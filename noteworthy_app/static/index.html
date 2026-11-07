@@ -36,7 +36,7 @@
   <section><h2>Ask a question</h2><label for="question">Question</label><input id="question" type="text" placeholder="What does the document say about…?"><button id="ask" disabled>Find answer</button><p id="answer" aria-live="polite"></p></section>
 </main>
 <section style="margin-top:18px"><h2>Source passages</h2><div id="sources" class="muted">Sources for the answer appear here.</div></section>
-<section style="margin-top:18px"><h2>Practice quiz</h2><p class="muted">Five questions generated from the uploaded PDF. Each answer links to its source paragraph.</p><button id="makeQuiz" disabled>Generate five questions</button><div id="quiz"></div><p id="quizResult" role="status"></p></section>
+<section style="margin-top:18px"><h2>Practice quiz</h2><p class="muted">Multiple choice, true/false, fill-in-the-blank, and short-answer questions generated from the uploaded PDF. Each answer links to its source paragraph.</p><button id="makeQuiz" disabled>Generate a quiz</button><div id="quiz"></div><p id="quizResult" role="status"></p></section>
 <section style="margin-top:18px"><h2>Scores by topic</h2><div id="topicScores"></div></section>
 <script>
   let selectedDocument = null;
@@ -225,24 +225,43 @@
       currentQuizId = result.quiz_id;
       const questions = result.questions;
       const container = $('quiz'); container.replaceChildren();
-      questions.forEach((item, index) => {
+      const readers = questions.map((item, index) => {
         const block = document.createElement('div'); block.className = 'quiz-question';
         const title = document.createElement('strong'); title.textContent = `${index + 1}. ${item.question}`;
-        block.append(title);
-        item.options.forEach((option, choice) => {
-          const label = document.createElement('label');
-          const radio = document.createElement('input'); radio.type = 'radio'; radio.name = `q${index}`; radio.value = choice;
-          label.append(radio, ` ${option}`); block.append(label);
+        block.append(title); container.append(block);
+        // Cloze questions send an option index; the shared schema sends a letter or True/False.
+        const radios = item.options ? item.options.map((option, choice) => [choice, option])
+          : item.type === 'True/False' ? [['True', 'True'], ['False', 'False']]
+          : item.type === 'Multiple Choice' ? Object.entries(item.choices).map(([key, text]) => [key, `${key}. ${text}`])
+          : null;
+        if (radios) {
+          radios.forEach(([value, text]) => {
+            const label = document.createElement('label');
+            const radio = document.createElement('input'); radio.type = 'radio'; radio.name = `q${index}`; radio.value = value;
+            label.append(radio, ` ${text}`); block.append(label);
+          });
+          return () => {
+            const chosen = document.querySelector(`input[name=q${index}]:checked`);
+            return chosen ? (item.options ? Number(chosen.value) : chosen.value) : null;
+          };
+        }
+        // One text box per blank, or one for a short answer.
+        const count = item.type === 'Fill-in-the-Blank' ? Math.max(1, item.question.split('_____').length - 1) : 1;
+        const boxes = Array.from({length: count}, (_, blank) => {
+          const label = document.createElement('label'); label.textContent = count > 1 ? `Question ${index + 1}, blank ${blank + 1}` : `Answer to question ${index + 1}`;
+          const box = document.createElement('input'); box.type = 'text'; box.value = '';
+          label.append(box); block.append(label); return box;
         });
-        container.append(block);
+        return () => {
+          const values = boxes.map(box => box.value.trim());
+          if (values.every(value => !value)) return null;
+          return count > 1 ? values : values[0];
+        };
       });
       const submit = document.createElement('button'); submit.textContent = 'Submit quiz';
       submit.onclick = async () => {
         if (quizBusy || submit.disabled || currentQuizId !== result.quiz_id) return;
-        const answers = questions.map((item, index) => {
-          const chosen = document.querySelector(`input[name=q${index}]:checked`);
-          return chosen ? Number(chosen.value) : null;
-        });
+        const answers = readers.map(read => read());
         quizBusy = true; submit.disabled = true; $('makeQuiz').disabled = true;
         $('quizResult').textContent = 'Saving quiz…';
         try {
@@ -250,7 +269,7 @@
           if (!selectedDocument || selectedDocument.id !== documentId || currentQuizId !== result.quiz_id) return;
           for (const item of graded.results) {
             const note = document.createElement('p');
-            note.textContent = `${item.correct ? 'Correct' : `Answer: ${item.expected_answer}`} · ${item.source_id}, page ${item.page}`;
+            note.textContent = `${item.correct ? 'Correct' : `Answer: ${[].concat(item.expected_answer).join(', ')}`} · ${item.source_id}, page ${item.page}`;
             container.children[graded.results.indexOf(item)].append(note);
           }
           $('quizResult').textContent = `Score: ${graded.correct} / ${graded.total}`;

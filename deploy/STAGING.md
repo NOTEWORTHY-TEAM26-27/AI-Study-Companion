@@ -142,8 +142,9 @@ backup stay.
 ## Model answers on staging
 
 Staging uses DigitalOcean serverless inference (`AI_PROVIDER=digitalocean`, model `openai-gpt-oss-120b`
-by default, with low reasoning effort). Each answer uses prepaid credit. If `DIGITALOCEAN_API_KEY` is
-empty, answers return 503 and upload and quiz still work.
+by default, with low reasoning effort). Each answer and each quiz is one model call and uses prepaid
+credit; a quiz call sends up to eight passages. If `DIGITALOCEAN_API_KEY` is empty, answers return 503
+and upload still works.
 
 The model access key must include the model in use, and a key's models cannot be changed after it is
 created. Create the key with `openai-gpt-oss-120b`. To use another model later, create a new key that
@@ -157,12 +158,18 @@ wrong, does not include the model, or the account tier does not allow the model.
 was cut off means the reply used the whole limit (`DIGITALOCEAN_MAX_TOKENS`, default 4,096; gpt-oss counts
 its reasoning in it).
 
+A quiz never returns 503. If its model call fails or no question passes the checks, the quiz has only the
+five cloze multiple-choice questions, and the app log has a warning. To see it, run
+`docker compose -f compose.yaml -f compose.staging.yaml logs app | grep "model questions\|Question model"`.
+
 ## Before the Gate Review (11/30)
 
 Do this a few days before 11/30, so there is time to fix problems.
 
 1. Health: `https://<STAGING_HOST>/health` answers `{"status": "ok"}`.
-2. One full flow on staging: upload a PDF, ask one question, make a quiz, and submit it. Reload the page
+2. One full flow on staging: upload a PDF, ask one question, make a quiz, and submit it. The quiz should
+   have true/false, fill-in-the-blank, and short-answer questions; only multiple choice means the model
+   call failed (see above). Reload the page
    and check that the PDF is still selected and Scores by topic still shows the result.
 3. Backup: run `./scripts/backup_staging.sh` on the server and copy the file off with `scp`.
 4. Cost:

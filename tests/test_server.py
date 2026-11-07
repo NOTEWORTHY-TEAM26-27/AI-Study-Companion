@@ -10,13 +10,16 @@ from unittest import mock
 
 from noteworthy_app.search import EmbeddingSearch
 from noteworthy_app.server import MAX_PDF_BYTES, create_server
-from tests.fixtures import study_pdf
+from tests.fixtures import model_questions, model_reply, study_pdf
 
 
 class ServerTests(unittest.TestCase):
     def setUp(self):
         # Keyword search unless a test sets one; never load the real search model.
         self.enterContext(mock.patch.dict(os.environ, {"RETRIEVAL": "keyword"}))
+        # The fake model's reply is not JSON, so quizzes use cloze questions; that warning
+        # is checked in test_question_generator.
+        self.enterContext(mock.patch("noteworthy_app.question_generator.LOGGER"))
         self.prompts = []
         self.storage = tempfile.TemporaryDirectory()
         self.addCleanup(self.storage.cleanup)
@@ -116,6 +119,7 @@ class ServerTests(unittest.TestCase):
         status, quiz = self.post("/api/quiz", {"document_id": document_id})
         self.assertEqual(status, 200)
         self.assertIn("quiz_id", quiz)
+        self.assertEqual(len(self.prompts), 1)
         for question in quiz["questions"]:
             self.assertEqual(set(question), {"question", "options", "source_id", "page", "topic"})
         # Keys are random, so read them from the saved quiz. Deliberately miss the first.
@@ -145,13 +149,45 @@ class ServerTests(unittest.TestCase):
         status, content = self.request("/api/progress", headers={"X-Learner-Id": "b" * 32})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(content), {"topic_scores": {}})
-        self.assertEqual(self.prompts, [])
+        # Only generating the quiz called the model; grading and progress did not.
+        self.assertEqual(len(self.prompts), 1)
+
+    def test_model_quiz_hides_keys_and_grades_all_four_formats(self):
+        document_id = self.upload()
+        self.server.answer_generator = lambda prompt: model_reply()
+        status, quiz = self.post("/api/quiz", {"document_id": document_id})
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            [question["type"] for question in quiz["questions"]],
+            [question["type"] for question in model_questions()],
+        )
+        for question in quiz["questions"]:
+            self.assertEqual(
+                set(question),
+                {"type", "question", "choices", "source_id", "page", "source_page", "topic"},
+            )
+        saved = json.loads(
+            (self.data_dir / "quizzes" / f"{quiz['quiz_id']}.json").read_text(encoding="utf-8")
+        )
+        answers = [question["answer"] for question in saved["questions"]]
+        answers[3] = "FALSE"
+        answers[6] = " Chemical Reactions. "
+        status, result = self.post(
+            "/api/quiz/submit",
+            {"quiz_id": quiz["quiz_id"], "learner_id": "a" * 32, "answers": answers},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual((result["correct"], result["total"]), (8, 8))
+        self.assertEqual(result["results"][5]["expected_answer"], ["Chromosomes", "nucleus"])
+        self.assertEqual(
+            result["results"][0]["source_text"], model_questions()[0]["source_excerpt"]
+        )
 
     def test_shared_question_schema_keeps_keys_and_excerpts_private_until_submission(self):
         from tests.test_grading import questions
 
         document_id = self.upload()
-        with mock.patch("noteworthy_app.server.generate_quiz", return_value=questions()):
+        with mock.patch("noteworthy_app.server.generate_questions", return_value=questions()):
             status, quiz = self.post("/api/quiz", {"document_id": document_id})
         self.assertEqual(status, 200)
         self.assertEqual(quiz["questions"][0]["choices"]["B"], "7")
