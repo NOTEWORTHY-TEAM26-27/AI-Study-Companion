@@ -5,7 +5,14 @@ import unittest
 from noteworthy_app.core import Passage, extract_passages
 from noteworthy_app.grading import grade_quiz
 from noteworthy_app.question_generator import BLANK, MAX_PASSAGES, _keys, generate_questions
-from tests.fixtures import model_questions, model_reply, study_pdf
+from tests.fixtures import (
+    BULLET,
+    SLIDE_STATEMENTS,
+    model_questions,
+    model_reply,
+    slide_passages,
+    study_pdf,
+)
 
 LOGGER_NAME = "noteworthy_app.question_generator"
 
@@ -124,10 +131,6 @@ class QuestionGeneratorTests(unittest.TestCase):
                     "source_excerpt": "Enzymes speed up chemical reactions",
                 },
             ),
-            "third true/false": (
-                7,
-                {"type": "True/False", "question": "Vacuoles store water.", "answer": "True"},
-            ),
             "not an object": (7, None),
         }
         for case, (index, change) in bad.items():
@@ -139,6 +142,239 @@ class QuestionGeneratorTests(unittest.TestCase):
                 self.assertEqual(len(questions), 8)
                 self.assertEqual(sum("type" in question for question in questions), 7)
                 self.assertEqual(cloze_sentence(questions[7]), good[index]["source_excerpt"])
+
+    def test_spare_model_questions_fill_the_gap_before_cloze(self):
+        items = model_questions()
+        # The vacuole question becomes a third true/false, so short answers are one short.
+        items[7] = {**items[7], "type": "True/False", "question": "Vacuoles store water."}
+        items[7]["answer"] = "True"
+        questions = generate_questions(
+            self.passages, self.model(model_reply(items)), random.Random(3)
+        )
+        self.assertEqual(len(questions), 8)
+        self.assertTrue(all("type" in question for question in questions))
+        self.assertEqual(sum(question["type"] == "True/False" for question in questions), 3)
+
+    def test_spare_replaces_a_question_dropped_for_showing_a_key(self):
+        extra = Passage(
+            "p2-1",
+            2,
+            "Neurons carry electrical signals between distant parts of the body. "
+            "Hormones travel through the blood to reach their target organs. "
+            "Muscles turn chemical energy into movement.",
+        )
+        items = model_questions()
+        # The second question's options show a fill-in-the-blank key, so it is dropped.
+        items[1] = {
+            **items[1],
+            "choices": {"A": "Membranes", "B": "Chromosomes", "C": "Ribosomes", "D": "Chlorophyll"},
+        }
+        # Spares, in reply order. Each one but the last breaks a rule and is skipped.
+        same_sentence = {
+            **items[3],
+            "type": "Multiple Choice",
+            "question": "What regulates the movement of substances into and out of cells?",
+            "choices": {"A": "Membranes", "B": "Neurons", "C": "Muscles", "D": "Hormones"},
+            "answer": "A",
+        }
+        shows_key = {
+            "type": "True/False",
+            "question": "Hormones travel through the blood and water to their target organs.",
+            "choices": {},
+            "answer": "False",
+            "source_page": 2,
+            "source_excerpt": "Hormones travel through the blood to reach their target organs.",
+        }
+        key_shown = {
+            "type": "Short Answer",
+            "question": "What do muscles turn into movement?",
+            "choices": {},
+            "answer": "chemical energy",
+            "source_page": 2,
+            "source_excerpt": "Muscles turn chemical energy into movement.",
+        }
+        spare = {
+            "type": "Multiple Choice",
+            "question": "What carries electrical signals between distant parts of the body?",
+            "choices": {"A": "Neurons", "B": "Hormones", "C": "Antibodies", "D": "Platelets"},
+            "answer": "A",
+            "source_page": 2,
+            "source_excerpt": "Neurons carry electrical signals between distant parts of the body.",
+        }
+        questions = generate_questions(
+            [*self.passages, extra],
+            self.model(
+                model_reply([*items[:2], same_sentence, *items[2:], shows_key, key_shown, spare])
+            ),
+            random.Random(16),
+        )
+        texts = [question["question"] for question in questions]
+        self.assertEqual(len(questions), 8)
+        self.assertTrue(all("type" in question for question in questions))
+        self.assertNotIn(items[1]["question"], texts)
+        # The membrane sentence is used by a later true/false question, one spare shows the
+        # short-answer key "water", and the first question shows the other spare's key.
+        for skipped in (same_sentence, shows_key, key_shown):
+            self.assertNotIn(skipped["question"], texts)
+        self.assertIn(spare["question"], texts)
+
+    def test_spares_follow_the_same_rules_as_each_other(self):
+        enzymes = "Enzymes speed up chemical reactions without being consumed themselves."
+        vacuoles = "Vacuoles store water and nutrients that plant cells need later."
+        spares = [
+            {
+                "type": "Multiple Choice",
+                "question": "What speeds up chemical reactions without being consumed?",
+                "choices": {"A": "Enzymes", "B": "Hormones", "C": "Vitamins", "D": "Minerals"},
+                "answer": "A",
+                "source_page": 1,
+                "source_excerpt": enzymes,
+            },
+            # Same sentence as the spare before it.
+            {
+                "type": "True/False",
+                "question": "Enzymes are used up by the reactions they speed up.",
+                "choices": {},
+                "answer": "False",
+                "source_page": 1,
+                "source_excerpt": enzymes,
+            },
+            {
+                "type": "True/False",
+                "question": "Cells contain many parts.",
+                "choices": {},
+                "answer": "True",
+                "source_page": 1,
+                "source_excerpt": vacuoles,
+            },
+        ]
+        extra = Passage(
+            "p2-1", 2, "Neurons carry electrical signals between distant parts of the body."
+        )
+        # The same text as the spare before it, on another sentence.
+        repeat = {**spares[2], "source_page": 2, "source_excerpt": extra.text}
+        # Both formats are full, so all four are spares for the three empty places.
+        items = [*model_questions()[:5], *spares, repeat]
+        with self.assertLogs(LOGGER_NAME, "WARNING"):
+            questions = generate_questions(
+                [*self.passages, extra], self.model(model_reply(items)), random.Random(19)
+            )
+        texts = [question["question"] for question in questions if "type" in question]
+        self.assertEqual(texts.count("Cells contain many parts."), 1)
+        self.assertNotIn(spares[1]["question"], texts)
+        self.assertIn(spares[0]["question"], texts)
+        self.assertEqual(len(texts), 7)
+        # With more good questions than places, the quiz stops at eight.
+        spare = {
+            "type": "Multiple Choice",
+            "question": "What carries electrical signals between distant parts of the body?",
+            "choices": {"A": "Neurons", "B": "Hormones", "C": "Antibodies", "D": "Platelets"},
+            "answer": "A",
+            "source_page": 2,
+            "source_excerpt": extra.text,
+        }
+        questions = generate_questions(
+            [*self.passages, extra],
+            self.model(model_reply([*model_questions(), spare])),
+            random.Random(20),
+        )
+        self.assertEqual(len(questions), 8)
+        self.assertNotIn(spare["question"], [question["question"] for question in questions])
+
+    def test_slide_bullets_each_count_as_a_sentence(self):
+        b = BULLET
+        items = [
+            {
+                "type": "Multiple Choice",
+                "question": f"{b} What releases energy from nutrients for the whole cell?",
+                "choices": {"A": "Mitochondria", "B": "Ribosomes", "C": "Vacuoles", "D": "Golgi"},
+                "answer": "A",
+                "source_page": 2,
+                "source_excerpt": "Mitochondria release energy from nutrients for the whole cell",
+            },
+            {
+                "type": "Short Answer",
+                "question": "What do ribosomes assemble proteins from?",
+                "choices": {},
+                "answer": "amino acids",
+                "source_page": 2,
+                "source_excerpt": f"Ribosomes assemble proteins from amino acids {b}",
+            },
+        ]
+        with self.assertLogs(LOGGER_NAME, "WARNING"):
+            questions = generate_questions(
+                slide_passages(), self.model(model_reply(items)), random.Random(4)
+            )
+        # Both bullets of slide 2 keep their questions, and the glyph is not shown.
+        self.assertEqual(
+            [question.get("type") for question in questions[:2]],
+            [items[0]["type"], items[1]["type"]],
+        )
+        self.assertEqual(
+            questions[0]["question"], "What releases energy from nutrients for the whole cell?"
+        )
+        # Cloze questions fill the rest from the slides' other full statements.
+        for question in questions[2:]:
+            filled = cloze_sentence(question)
+            self.assertIn(
+                filled, SLIDE_STATEMENTS - {item["source_excerpt"].strip(f" {b}") for item in items}
+            )
+
+    def test_prompt_puts_passages_with_statements_first(self):
+        title, table = slide_passages()[0], slide_passages()[3]
+        stores = "glucose protein calcium glycogen sucrose cellulose keratin collagen".split()
+        facts = [
+            Passage(
+                f"p{page}-1",
+                page,
+                f"Fact {BULLET} Cells on page {page} store {stored} and water for later use {BULLET} x",
+            )
+            for page, stored in zip(range(5, 13), stores)
+        ]
+        with self.assertLogs(LOGGER_NAME, "WARNING"):
+            generate_questions(
+                [title, table, *facts], self.model('{"questions": []}'), random.Random(17)
+            )
+        # Eight passages have a full statement, so the title slide and table are left out.
+        self.assertTrue(all(f"[{fact.id}, page" in self.prompts[0] for fact in facts))
+        self.assertNotIn("[p1-1,", self.prompts[0])
+        self.assertNotIn("[p4-1,", self.prompts[0])
+        # With one such passage, the others still fill the prompt from as many pages as possible.
+        fillers = [
+            Passage(f"p{page}-1", page, f"Rule {page}: S0 \u2192 S, S \u2192 AB {page}")
+            for page in range(1, 12)
+        ]
+        with self.assertLogs(LOGGER_NAME, "WARNING"), self.assertRaises(ValueError):
+            generate_questions(
+                [facts[0], *fillers], self.model('{"questions": []}'), random.Random(18)
+            )
+        sent = [p for p in [facts[0], *fillers] if f"[{p.id}, page" in self.prompts[1]]
+        self.assertIn(facts[0], sent)
+        self.assertEqual(len({passage.page for passage in sent}), MAX_PASSAGES)
+
+    def test_bullets_are_removed_and_other_font_symbols_drop_the_question(self):
+        text = "Mitochondria release energy from nutrients for the whole cell."
+        item = {
+            "type": "True/False",
+            "question": "\u2022 Mitochondria release energy from nutrients.",
+            "choices": {},
+            "answer": "True",
+            "source_page": 2,
+            "source_excerpt": text,
+        }
+        kept = self.kept_alone(text, item)
+        self.assertEqual(kept["question"], "Mitochondria release energy from nutrients.")
+        # Control characters are removed; a symbol inside the text is kept as written.
+        for question, shown in {
+            "Mitochondria \x8crelease\x8d energy.": "Mitochondria release energy.",
+            "A \u25cf mitochondrion releases energy.": "A \u25cf mitochondrion releases energy.",
+        }.items():
+            with self.subTest(question):
+                kept = self.kept_alone(text, {**item, "question": question})
+                self.assertEqual(kept["question"], shown)
+        # A Symbol-font letter (U+F071 is a theta) cannot be shown, and deleting it would
+        # change the question.
+        self.assertIsNone(self.kept_alone(text, {**item, "question": "Energy is \uf071 here."}))
 
     def test_cloze_top_up_fills_only_the_gap(self):
         extra = Passage(

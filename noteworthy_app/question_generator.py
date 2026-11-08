@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 from .core import STOPWORDS, Passage
 from .grading import PLAIN, _normalize, _short_answer
-from .quiz import SENTENCE, generate_quiz
+from .quiz import BULLET, FONT_BULLETS, _statement, generate_quiz, sentences
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,16 +51,16 @@ def _copied(part: list[str], text: str) -> bool:
 def _span(passage: Passage, part: list[str]) -> tuple[set[tuple[str, ...]], str]:
     """Return the passage sentences part was copied from, as words and as PDF text.
 
-    Sentences are split as the cloze quiz splits them.
+    Sentences and bullet points are split as the cloze quiz splits them.
     """
-    raw = SENTENCE.split(passage.text)
-    sentences = [tuple(_words(sentence)) for sentence in raw]
-    owners = [index for index, sentence in enumerate(sentences) for _ in "".join(sentence)]
-    start = "".join("".join(sentence) for sentence in sentences).find("".join(part))
+    raw = [sentence for sentence, _ in sentences(passage.text)]
+    units = [tuple(_words(sentence)) for sentence in raw]
+    owners = [index for index, unit in enumerate(units) for _ in "".join(unit)]
+    start = "".join("".join(unit) for unit in units).find("".join(part))
     if start < 0:
         return set(), ""
     covered = sorted(set(owners[start : start + len("".join(part))]))
-    return {sentences[index] for index in covered}, " ".join(raw[index] for index in covered)
+    return {units[index] for index in covered}, " ".join(raw[index] for index in covered)
 
 
 def _numbers(text: str) -> set[str]:
@@ -101,25 +101,42 @@ def _as_text(value, limit: int) -> str | None:
         value = str(value)
     if not isinstance(value, str) or len(value) > limit:
         return None
-    # Control characters copied from PDF text would show as nothing or as boxes.
-    return " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", value).split()) or None
+    # Control characters and symbol-font bullets copied from PDF text would show as nothing
+    # or as boxes, and a bullet may lead the text. Other private-use characters are font
+    # symbols whose meaning is lost.
+    value = re.sub(r"[\x00-\x1f\x7f-\x9f]|" + FONT_BULLETS, " ", value)
+    value = " ".join(re.sub(r"^(?:\s|" + BULLET.pattern + ")+", "", value).split())
+    if re.search(r"[\ue000-\uf8ff]", value):
+        return None
+    return value or None
 
 
 def _sample(passages: list[Passage], rng: random.Random) -> list[Passage]:
-    """Pick passages from as many pages as possible, returned in reading order."""
+    """Pick passages from as many pages as possible, returned in reading order.
+
+    Passages with a full statement come first; title slides, tables and figure labels only
+    fill the slots that are left.
+    """
     usable = [
         passage for passage in passages if len(passage.text.split()) >= MIN_EXCERPT_WORDS
     ] or passages
-    by_page: dict[int, list[Passage]] = {}
+    first, rest = [], []
     for passage in usable:
-        by_page.setdefault(passage.page, []).append(passage)
-    pages = list(by_page)
-    rng.shuffle(pages)
-    chosen = []
-    while len(chosen) < MAX_PASSAGES and any(by_page.values()):
-        for page in pages:
-            if by_page[page] and len(chosen) < MAX_PASSAGES:
-                chosen.append(by_page[page].pop(rng.randrange(len(by_page[page]))))
+        units = sentences(passage.text)
+        (first if any(done and _statement(unit) for unit, done in units) else rest).append(passage)
+    chosen: list[Passage] = []
+    for group in (first, rest):
+        by_page: dict[int, list[Passage]] = {}
+        for passage in group:
+            by_page.setdefault(passage.page, []).append(passage)
+        pages = list(by_page)
+        rng.shuffle(pages)
+        # Pages with no passage chosen yet go first.
+        pages.sort(key=lambda page: any(passage.page == page for passage in chosen))
+        while len(chosen) < MAX_PASSAGES and any(by_page.values()):
+            for page in pages:
+                if by_page[page] and len(chosen) < MAX_PASSAGES:
+                    chosen.append(by_page[page].pop(rng.randrange(len(by_page[page]))))
     order = {passage.id: index for index, passage in enumerate(passages)}
     return sorted(chosen, key=lambda passage: order[passage.id])
 
@@ -135,8 +152,9 @@ def _prompt(passages: list[Passage]) -> str:
         "Fill-in-the-Blank and Short Answer.\n"
         "Every question has these keys: type, question, choices, answer, source_page, "
         "source_excerpt.\n"
-        "- source_excerpt: one sentence copied exactly, word for word, from one passage. "
-        "It must support the answer. Use a different sentence for every question.\n"
+        "- source_excerpt: one sentence or bullet point copied exactly, word for word, from "
+        "one passage. It must support the answer. Use a different sentence or bullet point "
+        "for every question.\n"
         "- source_page: the page number of that passage.\n"
         '- Multiple Choice: choices is {"A": ..., "B": ..., "C": ..., "D": ...} with four '
         "different short options; answer is the letter of the one correct option.\n"
@@ -146,7 +164,11 @@ def _prompt(passages: list[Passage]) -> str:
         f"by {BLANK}; choices is {{}}; answer is the missing word, or a list of the missing "
         "words in order, copied exactly from the excerpt.\n"
         "- Short Answer: choices is {}; answer is one to four words copied from the excerpt, "
-        "and the question must not contain them.\n"
+        "and the question must not contain them. Ask for the one correct answer, never "
+        '"name one" of several.\n'
+        "Ask about the subject matter without mentioning the passages, text or slides. Skip "
+        "titles, author and course names, credits, page numbers, links and example text such "
+        "as sample emails.\n"
         "Write math as plain text a student can type, such as x1, A^T, A^-1 or "
         "[[1, 3], [0, 1]]. Do not use LaTeX, $ signs or backslashes.\n"
         'Return only JSON: {"questions": [...]}\n\n'
@@ -283,21 +305,21 @@ def generate_questions(
     used: set[tuple[str, ...]] = set()
     counts = dict.fromkeys(QUESTION_TYPES, 0)
     seen = set()
+    spares = []
     for item in items or []:
         checked = _check(item, sources, rng)
         if checked is None:
             continue
-        question, sentences = checked
+        question, units = checked
         # One sentence per question, so no question gives away another's answer.
-        if (
-            counts[question["type"]] == PER_TYPE
-            or question["question"].casefold() in seen
-            or sentences & used
-        ):
+        if question["question"].casefold() in seen or units & used:
+            continue
+        if counts[question["type"]] == PER_TYPE:
+            spares.append(checked)
             continue
         counts[question["type"]] += 1
         seen.add(question["question"].casefold())
-        used |= sentences
+        used |= units
         questions.append(question)
     # No question may show another question's typed key. Drop one at a time, latest first,
     # so a dropped question's key no longer counts against the others.
@@ -309,6 +331,18 @@ def generate_questions(
         )
     ]:
         questions.remove(revealing[-1])
+    # Fill any gap with spare questions of any format, under the same rules.
+    for question, units in spares:
+        if (
+            len(questions) < QUIZ_SIZE
+            and question["question"].casefold() not in seen
+            and not units & used
+            and not _reveals(question, [k for other in questions for k in _keys(other)])
+            and not any(_reveals(other, _keys(question)) for other in questions)
+        ):
+            seen.add(question["question"].casefold())
+            used |= units
+            questions.append(question)
     if len(questions) < QUIZ_SIZE:
         if items is not None:
             LOGGER.warning(
