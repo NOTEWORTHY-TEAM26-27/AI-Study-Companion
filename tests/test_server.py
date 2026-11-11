@@ -146,6 +146,9 @@ class ServerTests(unittest.TestCase):
             "/server.py",
             "/missing.html",
             "/missing.html?file=index.html",
+            # Names longer than the file system allows are refused before any lookup.
+            "/" + "a" * 300 + ".html",
+            "/" + "a" * 60000 + ".js",
         ]:
             with self.subTest(path=path):
                 status, _, body = self.page(path)
@@ -198,6 +201,17 @@ class ServerTests(unittest.TestCase):
         status, content = self.request("/api/documents")
         self.assertEqual(status, 200)
         self.assertIsNone(json.loads(content)["documents"][0]["uploaded_at"])
+
+    def test_upload_response_matches_the_listed_document(self):
+        status, uploaded = self.post(
+            "/api/upload", {"name": "biology.pdf", "data": base64.b64encode(study_pdf()).decode()}
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNotNone(uploaded["uploaded_at"])
+        # A page can add the upload to its list, date included, without listing again.
+        status, content = self.request("/api/documents")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(content)["documents"], [uploaded])
 
     def test_issued_quiz_can_be_loaded_again_without_keys(self):
         document_id = self.upload()

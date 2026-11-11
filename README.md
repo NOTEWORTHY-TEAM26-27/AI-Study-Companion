@@ -85,12 +85,22 @@ For frontend and generator integration:
 - `GET /api/quiz/<quiz_id>` returns an issued quiz again in the same shape as
   `POST /api/quiz` (`quiz_id`, `document_id`, public `questions`), so a page
   reload does not lose the quiz. Answer keys and excerpts stay on the server.
+  No route finds a quiz by document, so keep the quiz ID in the page URL (for
+  example `quiz.html?quiz=<quiz_id>`). On reload, a 200 from
+  `GET /api/attempts/<quiz_id>` means the quiz was already submitted; a 404 means
+  load it here and continue.
 - `GET /api/attempts` with the header `X-Learner-Id: ...` returns that browser's
   `attempts`, newest first, each with `quiz_id`, `document_id`, `document_name`
   (`null` if the document is no longer stored), `correct`, `total`, `score` and
   `created_at`.
 - `GET /api/attempts/<quiz_id>` with the same header returns one saved attempt,
-  exactly as `POST /api/quiz/submit` returned it.
+  exactly as `POST /api/quiz/submit` returned it. Each item in `results` has
+  `question_index`, `answer` (as submitted: an option index, a label such as
+  `A`, text, or `null`), `correct`, `expected_answer` (text, or a list for
+  several blanks), `topic`, `page`, `source_id` and `source_text`. It has no
+  question text: also load `GET /api/quiz/<quiz_id>`, match
+  `results[i].question_index` to `questions[i]`, and show `answer` through that
+  question's `options` (index) or `choices` (label).
 
 The grading function accepts current `options`/`answer_index` questions and the
 shared four-format schema in `research/question_generation/validate_questions.py`.
@@ -349,11 +359,11 @@ outside the source checkout. Runtime dependencies are pinned in
 | `noteworthy_app/question_generator.py` | Model questions in four formats, checked against the PDF, with cloze fallback |
 | `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions (fallback) |
 | `noteworthy_app/grading.py` | Server-side grading for the current and shared four-format question schemas |
-| `noteworthy_app/attempts.py` | Persist issued quizzes and attempts; summarize saved topic scores |
+| `noteworthy_app/attempts.py` | Persist and reload issued quizzes and attempts; list attempts; summarize saved topic scores |
 | `noteworthy_app/models.py` | Ollama and DigitalOcean adapter exposing `generate_answer(prompt) -> str` |
 | `noteworthy_app/server.py` | HTTP routes, validation, and in-memory document lookup |
-| `noteworthy_app/storage.py` | Save original PDFs and passages; restore documents on startup |
-| `noteworthy_app/static/index.html` | Upload, answer, quiz submission, and restored server-score interface |
+| `noteworthy_app/storage.py` | Save original PDFs and passages; restore documents on startup; report upload time |
+| `noteworthy_app/static/` | Pages, styles, scripts and images served by name; `index.html` is the upload, answer, quiz submission, and restored server-score interface |
 | `tests/` | Offline extraction, quiz, model adapter, and HTTP behavior checks |
 | `research/` | Question generation, knowledge graph, and RAG search research scripts (not run by the app) |
 | `deploy/`, `scripts/` | Staging server files, the deploy script, and the deploy key setup |
@@ -367,10 +377,10 @@ model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
 | Route | Behavior |
 |---|---|
 | `GET /` | Serve the study interface |
-| `GET /<name>.html`, `.css`, `.js`, `.svg` | Serve that file from `noteworthy_app/static/`; names use lower-case letters, digits and hyphens only, and any other path returns 404 |
+| `GET /<name>.html`, `.css`, `.js`, `.svg` | Serve that file from `noteworthy_app/static/`; names use lower-case letters, digits and hyphens only, up to 64 before the extension, and any other path returns 404 |
 | `GET /health` | Return `{"status":"ok"}` without calling external services |
-| `GET /api/documents` | List current and restored documents (ID, name, passage count, status, and `uploaded_at`, the time the PDF was last saved in UTC) from the configured storage directory |
-| `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID, passage count, and status |
+| `GET /api/documents` | List current and restored documents (ID, name, passage count, status, and `uploaded_at`, the time the PDF was last saved as ISO 8601 UTC, or `null` if the PDF is missing) from the configured storage directory |
+| `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID, name, passage count, status, and `uploaded_at` |
 | `POST /api/ask` | Accept `document_id` and `question`; return answer and source passages |
 | `POST /api/quiz` | Accept `document_id`; return `quiz_id` and up to eight public questions (type, prompt, options or choices, source IDs/pages), without answer keys or excerpts |
 | `POST /api/quiz/submit` | Accept `quiz_id`, `learner_id`, and `answers`; grade and persist one attempt, then return scores and source-linked feedback |

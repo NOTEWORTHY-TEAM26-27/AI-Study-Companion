@@ -179,6 +179,25 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual(len(logs.output), 3)
         self.assertEqual([item["quiz_id"] for item in history], [self.quiz["quiz_id"]])
 
+    def test_deeply_nested_saved_files_are_unreadable_records(self):
+        # json.loads can raise RecursionError here, which is not a ValueError.
+        self.submit()
+        nested = "[" * 100000 + "]" * 100000
+        (self.directory / "attempts" / LEARNER / f"{'c' * 32}.json").write_text(nested)
+        (self.directory / "quizzes" / f"{'c' * 32}.json").write_text(nested)
+        with self.assertLogs("noteworthy_app.attempts", level="WARNING") as logs:
+            history = self.store.history(LEARNER)
+            progress = self.store.progress(LEARNER)
+        self.assertEqual(len(logs.output), 2)
+        self.assertEqual([item["quiz_id"] for item in history], [self.quiz["quiz_id"]])
+        self.assertEqual(progress["topic_scores"]["Numbers"], {"correct": 2, "total": 2})
+        with self.assertRaisesRegex(RuntimeError, "^Saved attempt could not be read"):
+            self.store.attempt("c" * 32, LEARNER)
+        with self.assertRaisesRegex(RuntimeError, "^Saved quiz could not be read"):
+            self.store.quiz("c" * 32)
+        with self.assertRaisesRegex(RuntimeError, "^Saved quiz could not be read"):
+            self.store.submit("c" * 32, OTHER, [None] * 4)
+
     def test_untrusted_identifiers_cannot_select_storage_paths(self):
         for identifier in ["../outside", "", "A" * 32, None, "a" * 33]:
             with self.subTest(identifier=identifier):

@@ -21,7 +21,8 @@ from .storage import load_documents, save_document, uploaded_at
 
 STATIC_DIR = Path(__file__).parent / "static"
 # Lower-case letters, digits and hyphens only, so a URL cannot name any other path.
-STATIC_PAGE = re.compile(r"/([a-z0-9][a-z0-9-]*\.(?:html|css|js|svg))")
+# The length cap keeps names under every file system's limit.
+STATIC_PAGE = re.compile(r"/([a-z0-9][a-z0-9-]{0,63}\.(?:html|css|js|svg))")
 STATIC_TYPES = {
     "html": "text/html; charset=utf-8",
     "css": "text/css; charset=utf-8",
@@ -212,6 +213,7 @@ class Handler(BaseHTTPRequestHandler):
                         "name": name,
                         "passages": len(passages),
                         "status": "ready",
+                        "uploaded_at": uploaded_at(self.server.data_dir, document_id),
                     },
                 )
                 return

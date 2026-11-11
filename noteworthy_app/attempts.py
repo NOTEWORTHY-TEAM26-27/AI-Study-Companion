@@ -45,7 +45,7 @@ class AttemptStore:
             )
         except FileNotFoundError as exc:
             raise LookupError("Quiz not found. Generate a new quiz.") from exc
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
             raise RuntimeError("Saved quiz could not be read.") from exc
         if (
             not isinstance(quiz, dict)
@@ -59,7 +59,11 @@ class AttemptStore:
 
     @staticmethod
     def _read_attempt(path: Path, learner_id: str) -> dict:
-        record = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except RecursionError as exc:
+            # Deeply nested JSON is just another unreadable record, not a server error.
+            raise ValueError("Invalid saved attempt.") from exc
         if (
             record["learner_id"] != learner_id
             or record["quiz_id"] != path.stem
