@@ -82,6 +82,15 @@ For frontend and generator integration:
   return attempt bodies or answer keys. It scans the immutable saved attempts
   without holding the submit lock; a concurrent new attempt may appear on the
   next read. No new cache or database is required.
+- `GET /api/quiz/<quiz_id>` returns an issued quiz again in the same shape as
+  `POST /api/quiz` (`quiz_id`, `document_id`, public `questions`), so a page
+  reload does not lose the quiz. Answer keys and excerpts stay on the server.
+- `GET /api/attempts` with the header `X-Learner-Id: ...` returns that browser's
+  `attempts`, newest first, each with `quiz_id`, `document_id`, `document_name`
+  (`null` if the document is no longer stored), `correct`, `total`, `score` and
+  `created_at`.
+- `GET /api/attempts/<quiz_id>` with the same header returns one saved attempt,
+  exactly as `POST /api/quiz/submit` returned it.
 
 The grading function accepts current `options`/`answer_index` questions and the
 shared four-format schema in `research/question_generation/validate_questions.py`.
@@ -326,7 +335,8 @@ Use `make format PYTHON=python` to apply formatting and import fixes. An optiona
 browser-logic regression test runs with Node.js when installed, and is explicitly
 skipped otherwise; Node is not required to run the application. Tests use
 synthetic PDFs and a local test model server; they never call Ollama or a hosted
-model. The wheel includes the HTML interface, so an installed app can run
+model. The wheel includes the HTML, CSS, JavaScript and SVG files in
+`noteworthy_app/static/`, so an installed app can run
 outside the source checkout. Runtime dependencies are pinned in
 `requirements.txt`, and developer tools are pinned in `requirements-dev.txt`.
 
@@ -357,17 +367,22 @@ model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
 | Route | Behavior |
 |---|---|
 | `GET /` | Serve the study interface |
+| `GET /<name>.html`, `.css`, `.js`, `.svg` | Serve that file from `noteworthy_app/static/`; names use lower-case letters, digits and hyphens only, and any other path returns 404 |
 | `GET /health` | Return `{"status":"ok"}` without calling external services |
-| `GET /api/documents` | List current and restored documents (ID, name, passage count, and status) from the configured storage directory |
+| `GET /api/documents` | List current and restored documents (ID, name, passage count, status, and `uploaded_at`, the time the PDF was last saved in UTC) from the configured storage directory |
 | `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID, passage count, and status |
 | `POST /api/ask` | Accept `document_id` and `question`; return answer and source passages |
 | `POST /api/quiz` | Accept `document_id`; return `quiz_id` and up to eight public questions (type, prompt, options or choices, source IDs/pages), without answer keys or excerpts |
 | `POST /api/quiz/submit` | Accept `quiz_id`, `learner_id`, and `answers`; grade and persist one attempt, then return scores and source-linked feedback |
 | `GET /api/progress` | Accept the `X-Learner-Id` header and an optional `document_id` query parameter; return only aggregated `topic_scores` |
+| `GET /api/quiz/<quiz_id>` | Return an issued quiz again (`quiz_id`, `document_id`, public questions), without answer keys or excerpts |
+| `GET /api/attempts` | Accept the `X-Learner-Id` header; list that browser's attempts, newest first, with quiz and document IDs, document name, score, and date |
+| `GET /api/attempts/<quiz_id>` | Accept the `X-Learner-Id` header; return one saved attempt, the same as the submit response |
 
-The PDF limit is 12 MiB. Invalid JSON and fields return 400, missing routes or
-documents return 404, oversized uploads return 413, storage failures return 500,
-and model failures return 503.
+The PDF limit is 12 MiB. Invalid JSON and fields return 400, missing routes,
+documents, quizzes or attempts return 404, oversized uploads return 413, storage
+failures return 500, and model failures or unreadable saved quizzes and attempts
+return 503.
 
 ## Prototype limits
 

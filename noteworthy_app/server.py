@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,9 +17,19 @@ from .core import build_prompt, extract_passages
 from .models import generate_answer
 from .question_generator import generate_questions
 from .search import EmbeddingSearch, KeywordSearch, create_search
-from .storage import load_documents, save_document
+from .storage import load_documents, save_document, uploaded_at
 
-STATIC = Path(__file__).parent / "static" / "index.html"
+STATIC_DIR = Path(__file__).parent / "static"
+# Lower-case letters, digits and hyphens only, so a URL cannot name any other path.
+STATIC_PAGE = re.compile(r"/([a-z0-9][a-z0-9-]*\.(?:html|css|js|svg))")
+STATIC_TYPES = {
+    "html": "text/html; charset=utf-8",
+    "css": "text/css; charset=utf-8",
+    "js": "text/javascript; charset=utf-8",
+    "svg": "image/svg+xml",
+}
+QUIZ_ROUTE = re.compile(r"/api/quiz/([^/]+)")
+ATTEMPT_ROUTE = re.compile(r"/api/attempts/([^/]+)")
 MAX_PDF_BYTES = 12 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_PDF_BYTES * 2
 PUBLIC_QUESTION_FIELDS = {
@@ -31,6 +42,18 @@ PUBLIC_QUESTION_FIELDS = {
     "source_page",
     "topic",
 }
+
+
+def _public_quiz(quiz: dict) -> dict:
+    # Keep authoritative keys and excerpts on disk until the quiz is submitted.
+    return {
+        "quiz_id": quiz["quiz_id"],
+        "document_id": quiz["document_id"],
+        "questions": [
+            {key: value for key, value in item.items() if key in PUBLIC_QUESTION_FIELDS}
+            for item in quiz["questions"]
+        ],
+    }
 
 
 class StudyServer(ThreadingHTTPServer):
@@ -70,37 +93,76 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError(f"{key} must be a nonempty string of at most {limit} characters.")
         return value.strip()
 
+    def _static(self, name: str) -> None:
+        folder = STATIC_DIR.resolve()
+        path = (folder / name).resolve()
+        # The name pattern already blocks separators; this also stops links out of the folder.
+        if path.parent != folder or not path.is_file():
+            self._json(404, {"error": "Not found"})
+            return
+        body = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", STATIC_TYPES[name.rsplit(".", 1)[1]])
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
-        if path == "/":
-            body = STATIC.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif path == "/health":
+        page = STATIC_PAGE.fullmatch(path)
+        if path == "/" or page:
+            self._static(page[1] if page else "index.html")
+            return
+        if path == "/health":
             self._json(200, {"status": "ok"})
-        elif path == "/api/documents":
-            with self.server.document_lock:
-                # Text is extracted during upload, so every stored document is ready to use.
-                documents = [
-                    {"id": key, "name": name, "passages": len(passages), "status": "ready"}
-                    for key, (name, passages) in self.server.documents.items()
-                ]
-            self._json(200, {"documents": documents})
-        elif path == "/api/progress":
-            params = parse_qs(urlsplit(self.path).query)
-            try:
-                # The learner ID comes in a header so it stays out of URLs and request logs.
+            return
+        # The learner ID comes in a header so it stays out of URLs and request logs.
+        learner_id = self.headers.get("X-Learner-Id")
+        try:
+            if path == "/api/documents":
+                with self.server.document_lock:
+                    # Text is extracted during upload, so every stored document is ready to use.
+                    documents = [
+                        {
+                            "id": key,
+                            "name": name,
+                            "passages": len(passages),
+                            "status": "ready",
+                            "uploaded_at": uploaded_at(self.server.data_dir, key),
+                        }
+                        for key, (name, passages) in self.server.documents.items()
+                    ]
+                self._json(200, {"documents": documents})
+            elif path == "/api/progress":
+                params = parse_qs(urlsplit(self.path).query)
                 progress = self.server.attempts.progress(
-                    self.headers.get("X-Learner-Id"), params.get("document_id", [None])[0]
+                    learner_id, params.get("document_id", [None])[0]
                 )
                 self._json(200, progress)
-            except ValueError as exc:
-                self._json(400, {"error": str(exc)})
-        else:
-            self._json(404, {"error": "Not found"})
+            elif path == "/api/attempts":
+                attempts = self.server.attempts.history(learner_id)
+                with self.server.document_lock:
+                    names = {key: name for key, (name, _) in self.server.documents.items()}
+                for item in attempts:
+                    # Attempts outlive a removed document; they are listed without its name.
+                    item["document_name"] = names.get(item["document_id"])
+                self._json(200, {"attempts": attempts})
+            elif quiz := QUIZ_ROUTE.fullmatch(path):
+                self._json(200, _public_quiz(self.server.attempts.quiz(quiz[1])))
+            elif attempt := ATTEMPT_ROUTE.fullmatch(path):
+                self._json(200, self.server.attempts.attempt(attempt[1], learner_id))
+            else:
+                self._json(404, {"error": "Not found"})
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)})
+        except RuntimeError as exc:
+            self._json(503, {"error": str(exc)})
+        except LookupError as exc:
+            self._json(404, {"error": str(exc)})
+        except OSError:
+            self.log_error("Could not read data from storage")
+            self._json(500, {"error": "Could not read data. Please try again."})
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
@@ -163,12 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/quiz":
                 questions = generate_questions(passages, self.server.answer_generator)
                 quiz = self.server.attempts.issue(document_id, questions)
-                # Keep authoritative keys and excerpts on disk until the quiz is submitted.
-                public_questions = [
-                    {key: value for key, value in item.items() if key in PUBLIC_QUESTION_FIELDS}
-                    for item in quiz["questions"]
-                ]
-                self._json(200, {**quiz, "questions": public_questions})
+                self._json(200, _public_quiz(quiz))
                 return
             question = self._string(payload, "question", 1000)
             matches = self.server.search.retrieve(document_id, passages, question)
