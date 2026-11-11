@@ -2,15 +2,5 @@
 # Caddy gets the HTTPS certificate automatically.
 {$STAGING_HOST} {
 	encode gzip
-
-	# Staging needs a shared password until student accounts arrive (CR-11).
-	# /health stays open so scripts/deploy_staging.sh can check the app after a deploy.
-	@private {
-		not path /health
-	}
-	basic_auth @private {
-		{$STAGING_USER} {$STAGING_PASSWORD_HASH}
-	}
-
 	reverse_proxy app:8000
 }
