@@ -45,8 +45,8 @@ The URL uses sslip.io because the course cannot buy a domain name.
    ```
 
    Set `STAGING_HOST` to the Reserved IP with dashes plus `.sslip.io`, for example `203-0-113-10.sslip.io`.
-   Paste the DigitalOcean model access key after `DIGITALOCEAN_API_KEY=`. After changing `.env`, run the
-   deploy script so the app picks it up.
+   Paste the DigitalOcean model access key after `DIGITALOCEAN_API_KEY=`. Set the staging login (see
+   "Staging login" below). After changing `.env`, run the deploy script so the app picks it up.
 
 ## Deploy
 
@@ -138,6 +138,32 @@ To restore a backup:
 
 A restore adds the files in the backup and replaces files with the same name. Files saved after the
 backup stay.
+
+## Staging login
+
+The app does not separate students yet (accounts come with CR-11 in Senior Design II), so Caddy asks for
+one shared login on every page except `/health`. This keeps people without the login from uploading files,
+reading documents, or using model credit. Share the login with the team and Dr. Wang only.
+
+1. Pick a password and keep it out of the repo.
+2. On the server, make its hash (type the password twice when asked):
+
+   ```bash
+   docker run --rm -it caddy:2 caddy hash-password
+   ```
+
+3. In `.env`, set `STAGING_USER` and `STAGING_PASSWORD_HASH`. Keep the single quotes around the hash,
+   because it contains `$` signs:
+
+   ```
+   STAGING_USER=noteworthy
+   STAGING_PASSWORD_HASH='$2a$14$...'
+   ```
+
+4. Run `./scripts/deploy_staging.sh`. Without both values, `docker compose` stops with an error and staging
+   keeps running the previous version.
+
+To change the password, repeat steps 2 to 4.
 
 ## Model answers on staging
 
