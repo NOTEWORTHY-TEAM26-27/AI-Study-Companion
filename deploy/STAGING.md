@@ -135,9 +135,18 @@ To restore a backup:
      | docker compose -f compose.yaml -f compose.staging.yaml exec -T app tar -C /data/documents -xf -
    docker compose -f compose.yaml -f compose.staging.yaml restart app
    ```
-5. Open `https://<STAGING_HOST>/api/documents` and check that it lists the restored documents. The web
-   page itself lists only documents uploaded from that browser. With student accounts on, log in first;
-   the list then shows only that student's documents.
+5. With student accounts off, open `https://<STAGING_HOST>/api/documents` and check that it lists the
+   restored documents. The web page itself lists only documents uploaded from that browser.
+   With student accounts on, `/api/documents` needs a login and shows only that student's documents
+   (none from before accounts), so it is not a full check. List the files instead:
+
+   ```bash
+   docker compose -f compose.yaml -f compose.staging.yaml exec app \
+     ls /data/documents /data/documents/accounts/users
+   ```
+
+   Each document is a `.pdf` and a `.json` with the same ID, and each account is one `.json` in
+   `accounts/users`.
 
 A restore adds the files in the backup and replaces files with the same name. Files saved after the
 backup stay.

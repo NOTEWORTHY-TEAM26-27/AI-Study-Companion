@@ -128,11 +128,15 @@ every API call returns 401.
 
 Settings, read when the app starts (Compose passes them through from `.env`):
 
-- `CLASS_CODE`: turns accounts on when set and not empty. Spaces around it, and around
-  the code a student types, are ignored. Keep it commented out in `.env`: the tests
-  expect accounts off, so a shell that exports it makes the existing server tests fail.
+- `CLASS_CODE`: turns accounts on when set and not empty. It must be at least 16
+  characters, or startup stops, because wrong codes are cheap to try. Make a random
+  one with `python -c "import secrets; print(secrets.token_urlsafe(12))"` (16
+  characters). Spaces around it, and around the code a student types, are ignored.
+  Keep it commented out in `.env`: the tests expect accounts off, so a shell that
+  exports it makes the existing server tests fail.
 - `COOKIE_SECURE=1`: adds `Secure` to the login cookie, so browsers send it only over
-  HTTPS. Set it on staging.
+  HTTPS, and names it `__Host-noteworthy_session` (see Security choices). Set it on
+  staging.
 - `SESSION_DAYS`: how long a login lasts, in whole days (default 7). Any other value
   stops startup.
 
@@ -147,11 +151,18 @@ Routes (accounts on). Request bodies are JSON, and a POST without
   for a body over 16 KiB.
 - `POST /api/login` with `{"email":"...","password":"..."}` returns 200
   `{"email":"..."}` and sets the cookie. An unknown email and a wrong password both
-  return 401 `{"error":"Email or password is not correct."}`.
-- `POST /api/logout` needs no body. It deletes the session and returns 200
-  `{"status":"logged out"}` with a cookie that clears the browser's copy. It also works
-  without a session, so calling it twice is fine.
-- `GET /api/me` returns 200 `{"email":"..."}` for the logged-in student.
+  return 401 `{"error":"Email or password is not correct."}`. After 5 tries at one
+  email within 15 minutes, more tries return 429
+  `{"error":"Too many attempts. Try again later."}`, even with the right password,
+  until 15 minutes after the first try. A successful login clears the count.
+- `POST /api/logout` needs no body (an empty one is fine), but it still needs
+  `Content-Type: application/json`; without it the reply is 415 and the session stays.
+  It deletes the session and returns 200 `{"status":"logged out"}` with a cookie that
+  clears the browser's copy. It also works without a session, so calling it twice is
+  fine.
+- `GET /api/me` returns 200 `{"email":"..."}` for the logged-in student. Without a
+  session it returns 401 `{"error":"Log in to continue."}`, and with accounts off it
+  returns 404, so a page can tell whether to show the login screen.
 
 Every other `/api/` route needs the login cookie and returns 401
 `{"error":"Log in to continue."}` without it; `X-Learner-Id` alone is not enough. With
@@ -163,12 +174,27 @@ another student's document never calls the model. The browser sends the cookie w
 each same-site request on its own; pages cannot read it. `GET /`, the static pages and
 `/health` need no login, so a login page can load.
 
+The current page lists only the `/api/documents` rows whose IDs are saved in the
+browser's local storage, and restores the selected PDF from there. With accounts on,
+the login screens (SCRUM-146) should show the full list, since the server already
+returns only the student's documents. Otherwise a student on a second device, or after
+clearing browser storage, sees no documents or scores.
+
 Security choices (for the SCRUM-147 review):
 
-- Passwords are hashed with scrypt (N=16384, r=8, p=1, a random 16-byte salt for each
-  account, a 32-byte key). The parameters are saved with each hash
-  (`scrypt$16384$8$1$<salt>$<key>`), so they can be raised later without breaking
-  older hashes. One hash takes about 50 ms and 16 MiB, which suits the 2 GB Droplet.
+- Passwords are hashed with scrypt (N=16384, r=8, p=5, a random 16-byte salt for each
+  account, a 32-byte key). OWASP lists this as equal in cost to its minimum of
+  N=2^17, r=8, p=1, with less memory. The parameters are saved with each hash
+  (`scrypt$16384$8$5$<salt>$<key>`), so they can be raised later without breaking
+  older hashes (hashes made earlier with p=1 still work). One hash takes about 0.2
+  seconds and 16 MiB. At most two hashes run at once and other logins and sign-ups
+  wait their turn, so hashing never holds more than 32 MiB on the 2 GB Droplet, however
+  many requests arrive.
+- Login allows 5 tries per email in 15 minutes and returns 429 after that. A try is
+  counted before any hashing, so parallel requests cannot get past the limit and
+  refused ones cost almost nothing. Unknown emails are counted the same way, so a 429
+  does not show which emails have accounts. The counts are in memory (by SHA-256 of
+  the email), so a restart clears them.
 - Passwords and the class code are compared with `hmac.compare_digest`, as bytes.
 - Login gives one message for an unknown email and a wrong password, and an unknown
   email is still checked against a stand-in hash, so the reply time does not show
@@ -176,9 +202,13 @@ Security choices (for the SCRUM-147 review):
   without the code it shows nothing about which emails exist.
 - A session is a 256-bit random token from `secrets`. The server stores only its
   SHA-256, so a copy of the session files cannot be used to log in.
-- The cookie `noteworthy_session` is `HttpOnly`, `SameSite=Lax` and `Path=/`, plus
-  `Secure` with `COOKIE_SECURE=1`. It lasts `SESSION_DAYS` (7 by default) from login,
-  and using it does not extend it. Logout deletes the session on the server.
+- The cookie is `HttpOnly`, `SameSite=Lax` and `Path=/`. It is `noteworthy_session`,
+  or with `COOKIE_SECURE=1` it is `__Host-noteworthy_session` and also `Secure`.
+  Browsers accept a `__Host-` cookie only from this exact host over HTTPS, so another
+  `*.sslip.io` site (anyone can run one) cannot set a cookie for staging that logs a
+  student into the other site's account. A request with two session cookies is treated
+  as logged out. The cookie lasts `SESSION_DAYS` (7 by default) from login, and using
+  it does not extend it. Logout deletes the session on the server.
 - POSTs must be JSON. A page on another site cannot send JSON here without a CORS
   preflight, which this server refuses (it answers `OPTIONS` with 501), so it cannot
   make a logged-in student's browser upload, ask, submit, or log in or out. This is
@@ -201,12 +231,16 @@ Storage:
   owner are hidden while accounts are off.
 - Accounts and sessions sit behind a small store interface (`AccountStore` in
   `noteworthy_app/accounts.py`), so the PostgreSQL work (SCRUM-225) can replace the
-  files. Documents, quizzes and attempts are not behind it yet.
+  files. Its docstring lists the record shapes and which errors a store must raise.
+  Documents, quizzes and attempts are not behind it yet.
 
 Limits:
 
-- No rate limit on login or sign-up yet. scrypt slows guessing to about 50 ms a try,
-  and sign-up needs the class code, but repeated guesses at one email are not blocked.
+- Login tries are limited per email, not per client: the app sees every request as
+  coming from Caddy. So someone who knows a student's email can keep that student from
+  logging in by failing 5 logins every 15 minutes.
+- Sign-up has no rate limit. A wrong class code is cheap to check, so the code must be
+  long and random (see `CLASS_CODE` above).
 - No password reset, email check, or way to delete an account.
 - One app process: a lock in that process keeps emails unique. More than one process
   needs the PostgreSQL store with a unique email column.
@@ -510,9 +544,9 @@ The PDF limit is 12 MiB. Invalid JSON and fields return 400, missing routes,
 documents, quizzes or attempts return 404, oversized uploads return 413, storage
 failures return 500, and model failures or unreadable saved quizzes and attempts
 return 503. With student accounts on, a missing or expired session returns 401, a
-wrong class code 403, an email that already has an account 409, and a POST without
-a JSON content type 415; another student's documents, quizzes and attempts return
-404.
+wrong class code 403, an email that already has an account 409, a POST without a
+JSON content type 415, and too many login tries 429; another student's documents,
+quizzes and attempts return 404.
 
 ## Prototype limits
 

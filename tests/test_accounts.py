@@ -5,12 +5,14 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from noteworthy_app.accounts import (
     COOKIE_NAME,
+    SECURE_COOKIE_NAME,
     AccountError,
     Accounts,
     FileAccountStore,
@@ -26,7 +28,7 @@ from noteworthy_app.server import create_server
 from noteworthy_app.storage import save_document
 from tests.fixtures import study_pdf
 
-CLASS_CODE = "cse4316-test"
+CLASS_CODE = "cse4316-class-code"
 PASSWORD = "correct horse battery"
 JSON = {"Content-Type": "application/json"}
 LOG_IN = {"error": "Log in to continue."}
@@ -37,7 +39,7 @@ class PasswordTests(unittest.TestCase):
     def test_hash_stores_its_parameters_and_a_random_salt(self):
         stored = hash_password(PASSWORD)
         scheme, n, r, p, salt, key = stored.split("$")
-        self.assertEqual((scheme, n, r, p), ("scrypt", "16384", "8", "1"))
+        self.assertEqual((scheme, n, r, p), ("scrypt", "16384", "8", "5"))
         self.assertEqual((len(bytes.fromhex(salt)), len(bytes.fromhex(key))), (16, 32))
         self.assertNotEqual(hash_password(PASSWORD), stored)
         self.assertTrue(verify_password(PASSWORD, stored))
@@ -46,7 +48,11 @@ class PasswordTests(unittest.TestCase):
                 self.assertFalse(verify_password(wrong, stored))
 
     def test_hashes_keep_working_when_the_parameters_change(self):
-        with mock.patch("noteworthy_app.accounts.SCRYPT_N", 2**10):
+        # Hashes made before p went from 1 to 5 still match.
+        with (
+            mock.patch("noteworthy_app.accounts.SCRYPT_N", 2**10),
+            mock.patch("noteworthy_app.accounts.SCRYPT_P", 1),
+        ):
             older = hash_password(PASSWORD)
         self.assertTrue(older.startswith("scrypt$1024$8$1$"))
         self.assertTrue(verify_password(PASSWORD, older))
@@ -77,6 +83,45 @@ class PasswordTests(unittest.TestCase):
             with self.subTest(stored=stored):
                 self.assertFalse(verify_password(PASSWORD, stored))
 
+    def test_at_most_two_hashes_run_at_once(self):
+        real = hashlib.scrypt
+        lock = threading.Lock()
+        running = [0]
+        peak = [0]
+
+        def scrypt(*args, **kwargs):
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            try:
+                # Long enough that the threads below overlap if nothing stops them.
+                time.sleep(0.05)
+                return real(*args, **kwargs)
+            finally:
+                with lock:
+                    running[0] -= 1
+
+        self.enterContext(mock.patch("noteworthy_app.accounts.SCRYPT_N", 2**10))
+        stored = hash_password(PASSWORD)
+        barrier = threading.Barrier(6)
+        results = []
+
+        def check(index):
+            barrier.wait()
+            if index % 2:
+                results.append(verify_password(PASSWORD, stored))
+            else:
+                results.append(verify_password(PASSWORD, hash_password(PASSWORD)))
+
+        with mock.patch("noteworthy_app.accounts.hashlib.scrypt", scrypt):
+            threads = [threading.Thread(target=check, args=(index,)) for index in range(6)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+        self.assertEqual(results, [True] * 6)
+        self.assertEqual(peak[0], 2)
+
 
 class HelperTests(unittest.TestCase):
     def test_email_is_trimmed_and_lowercased(self):
@@ -103,9 +148,14 @@ class HelperTests(unittest.TestCase):
             session_cookie("abc", 60, False),
             "noteworthy_session=abc; Max-Age=60; Path=/; HttpOnly; SameSite=Lax",
         )
+        # Over HTTPS the name has the __Host- prefix, so another *.sslip.io site cannot set it.
         self.assertEqual(
             session_cookie(None, 60, True),
-            "noteworthy_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Secure",
+            "__Host-noteworthy_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Secure",
+        )
+        self.assertEqual(
+            [Accounts(mock.Mock(), CLASS_CODE, 60, secure).cookie_name for secure in [False, True]],
+            ["noteworthy_session", "__Host-noteworthy_session"],
         )
 
     def test_only_a_hash_of_the_token_is_kept(self):
@@ -121,22 +171,30 @@ class HelperTests(unittest.TestCase):
                 # Other account settings are not read while accounts are off.
                 os.environ["SESSION_DAYS"] = "never"
                 self.assertIsNone(accounts_from_env(unused))
-        settings = {"CLASS_CODE": " code\r", "SESSION_DAYS": "", "COOKIE_SECURE": ""}
+        settings = {"CLASS_CODE": f" {CLASS_CODE}\r", "SESSION_DAYS": "", "COOKIE_SECURE": ""}
         with mock.patch.dict(os.environ, settings):
             accounts = accounts_from_env(unused)
         self.assertEqual(
             (accounts.class_code, accounts.session_seconds, accounts.cookie_secure),
-            ("code", WEEK, False),
+            (CLASS_CODE, WEEK, False),
         )
-        settings = {"CLASS_CODE": "code", "SESSION_DAYS": " 2 ", "COOKIE_SECURE": "1\r"}
+        settings = {"CLASS_CODE": "x" * 16, "SESSION_DAYS": " 2 ", "COOKIE_SECURE": "1\r"}
         with mock.patch.dict(os.environ, settings):
             accounts = accounts_from_env(unused)
         self.assertEqual((accounts.session_seconds, accounts.cookie_secure), (2 * 86400, True))
         for days in ["0", "-1", "1.5", "+2", "week", "²"]:
             with (
                 self.subTest(days=days),
-                mock.patch.dict(os.environ, {"CLASS_CODE": "code", "SESSION_DAYS": days}),
+                mock.patch.dict(os.environ, {"CLASS_CODE": CLASS_CODE, "SESSION_DAYS": days}),
                 self.assertRaisesRegex(ValueError, "SESSION_DAYS must be a whole number"),
+            ):
+                accounts_from_env(unused)
+        # A short code could be guessed, so it stops startup.
+        for code in ["cse4316", "x" * 15, f"  {'x' * 15}  "]:
+            with (
+                self.subTest(code=code),
+                mock.patch.dict(os.environ, {"CLASS_CODE": code}),
+                self.assertRaisesRegex(ValueError, "CLASS_CODE must be at least 16 characters"),
             ):
                 accounts_from_env(unused)
         self.assertFalse(unused.exists())
@@ -225,6 +283,8 @@ class FileAccountStoreTests(unittest.TestCase):
 
 class AccountsTests(unittest.TestCase):
     def setUp(self):
+        # Faster hashes; PasswordTests use the real setting.
+        self.enterContext(mock.patch("noteworthy_app.accounts.SCRYPT_N", 2**10))
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name) / "accounts"
@@ -343,6 +403,67 @@ class AccountsTests(unittest.TestCase):
         self.assertEqual(user, {"email": "student@uta.edu"})
         self.assertEqual(self.accounts.current(token)["email"], "student@uta.edu")
 
+    def assert_status(self, status, email, password):
+        with self.assertRaises(AccountError) as caught:
+            self.accounts.log_in(email, password)
+        self.assertEqual(caught.exception.status, status)
+        return str(caught.exception)
+
+    def test_repeated_login_failures_wait_for_the_window(self):
+        self.accounts.sign_up("student@uta.edu", PASSWORD, CLASS_CODE)
+        with (
+            mock.patch("noteworthy_app.accounts.time") as clock,
+            mock.patch("noteworthy_app.accounts.verify_password", wraps=verify_password) as verify,
+        ):
+            clock.time.return_value = 1_800_000_000
+            # A successful login clears the count.
+            for _ in range(4):
+                self.assert_status(401, "student@uta.edu", "wrong password")
+            self.accounts.log_in("student@uta.edu", PASSWORD)
+            for email in ["student@uta.edu", "nobody@uta.edu"]:
+                for _ in range(5):
+                    self.assert_status(401, email, "wrong password")
+            verify.reset_mock()
+            # Then even the right password is refused, without hashing. Unknown emails are
+            # limited the same way, so a 429 does not show which emails have accounts.
+            for email, password in [
+                ("student@uta.edu", PASSWORD),
+                (" STUDENT@uta.edu ", PASSWORD),
+                ("nobody@uta.edu", PASSWORD),
+            ]:
+                with self.subTest(email=email):
+                    self.assertEqual(
+                        self.assert_status(429, email, password),
+                        "Too many attempts. Try again later.",
+                    )
+            verify.assert_not_called()
+            # Other emails are not affected.
+            self.assert_status(401, "other@uta.edu", "wrong password")
+            clock.time.return_value = 1_800_000_000 + 15 * 60
+            self.assertEqual(
+                self.accounts.log_in("student@uta.edu", PASSWORD)[0], {"email": "student@uta.edu"}
+            )
+            # Ended windows are dropped, so the table holds only recent emails.
+            self.assertEqual(len(self.accounts.tries), 0)
+
+    def test_parallel_logins_cannot_pass_the_limit(self):
+        barrier = threading.Barrier(8)
+        results = []
+
+        def log_in():
+            barrier.wait()
+            try:
+                self.accounts.log_in("nobody@uta.edu", PASSWORD)
+            except AccountError as exc:
+                results.append(exc.status)
+
+        threads = [threading.Thread(target=log_in) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        self.assertEqual(sorted(results), [401] * 5 + [429] * 3)
+
     def test_log_out_deletes_the_session(self):
         _, token = self.accounts.sign_up("student@uta.edu", PASSWORD, CLASS_CODE)
         _, other = self.accounts.log_in("student@uta.edu", PASSWORD)
@@ -388,7 +509,7 @@ class AccountServerTests(unittest.TestCase):
         )
         os.environ.pop("COOKIE_SECURE", None)
         os.environ.pop("SESSION_DAYS", None)
-        # Faster hashes over HTTP; the tests above use the real setting.
+        # Faster hashes over HTTP; PasswordTests use the real setting.
         self.enterContext(mock.patch("noteworthy_app.accounts.SCRYPT_N", 2**10))
         # The fake model's reply is not JSON, so quizzes use cloze questions.
         self.enterContext(mock.patch("noteworthy_app.question_generator.LOGGER"))
@@ -433,7 +554,8 @@ class AccountServerTests(unittest.TestCase):
     def request(self, path, body=None, token=None, headers=None, method=None):
         headers = dict(headers or {})
         if token is not None:
-            headers["Cookie"] = f"{COOKIE_NAME}={token}"
+            name = getattr(self.server.accounts, "cookie_name", COOKIE_NAME)
+            headers["Cookie"] = f"{name}={token}"
         connection = http.client.HTTPConnection(*self.server.server_address, timeout=3)
         self.addCleanup(connection.close)
         connection.request(method or ("GET" if body is None else "POST"), path, body, headers)
@@ -450,7 +572,7 @@ class AccountServerTests(unittest.TestCase):
 
     def token(self, headers):
         name, value = headers["Set-Cookie"].split(";", 1)[0].split("=", 1)
-        self.assertEqual(name, COOKIE_NAME)
+        self.assertEqual(name, self.server.accounts.cookie_name)
         return value
 
     def sign_up(self, email="a@uta.edu", password=PASSWORD):
@@ -524,8 +646,14 @@ class AccountServerTests(unittest.TestCase):
             headers["Set-Cookie"].split("; ")[1:],
             ["Max-Age=172800", "Path=/", "HttpOnly", "SameSite=Lax", "Secure"],
         )
+        # Over HTTPS the cookie name has the __Host- prefix.
+        self.assertTrue(headers["Set-Cookie"].startswith(f"{SECURE_COOKIE_NAME}="))
         # Sessions are kept across a restart.
         self.assertEqual(self.get("/api/me", token), (200, {"email": "a@uta.edu"}))
+        # With COOKIE_SECURE=1 only the __Host- cookie counts. Another site under the same
+        # parent domain can set the plain name, but not this one.
+        plain = {"Cookie": f"{COOKIE_NAME}={token}"}
+        self.assertEqual(self.get("/api/me", headers=plain), (401, LOG_IN))
         for days in ["0", "-3", "1.5", "week"]:
             with (
                 self.subTest(days=days),
@@ -552,10 +680,11 @@ class AccountServerTests(unittest.TestCase):
                 self.assertEqual(status, expected)
                 self.assertIn("error", json.loads(content))
                 self.assertIsNone(headers["Set-Cookie"])
-        for body in ["{", "[]", "null"]:
-            with self.subTest(body=body):
-                status, _, _ = self.request("/api/signup", body, headers=JSON)
+        for body in ["{", "[]", "null", "[" * 5000]:
+            with self.subTest(body=body[:10]):
+                status, _, content = self.request("/api/signup", body, headers=JSON)
                 self.assertEqual(status, 400)
+                self.assertNotIn("recursion", json.loads(content)["error"])
         # Too large: refused before reading, so no body is sent.
         status, _, content = self.request(
             "/api/signup", headers={**JSON, "Content-Length": str(16 * 1024 + 1)}, method="POST"
@@ -588,6 +717,15 @@ class AccountServerTests(unittest.TestCase):
             (401, {"error": "Email or password is not correct."}),
         )
         self.assertEqual(self.post("/api/login", {"email": 5, "password": PASSWORD})[0], 400)
+        # After five tries at one email in 15 minutes, the next waits for the window.
+        payload = {"email": "nobody@uta.edu", "password": PASSWORD}
+        for _ in range(4):
+            self.assertEqual(self.post("/api/login", payload)[0], 401)
+        status, headers, content = self.request("/api/login", json.dumps(payload), headers=JSON)
+        self.assertEqual(
+            (status, json.loads(content)), (429, {"error": "Too many attempts. Try again later."})
+        )
+        self.assertIsNone(headers["Set-Cookie"])
         payload = {"email": " A@UTA.edu", "password": PASSWORD}
         status, headers, content = self.request("/api/login", json.dumps(payload), headers=JSON)
         self.assertEqual((status, json.loads(content)), (200, {"email": "a@uta.edu"}))
@@ -632,15 +770,24 @@ class AccountServerTests(unittest.TestCase):
             f'prefs={{"theme":"dark"}}; {session}',
             f"Path=/; {session}",
             f'x="unclosed; {session}',
-            f"{COOKIE_NAME}=old; {session}",
+            f"{SECURE_COOKIE_NAME}=x; {session}",
         ]:
             with self.subTest(header=header):
                 self.assertEqual(
                     self.get("/api/me", headers={"Cookie": header}), (200, {"email": "a@uta.edu"})
                 )
-        # The browser lists the newest cookie of a name last, and that one is used.
-        newest = {"Cookie": f"{session}; {COOKIE_NAME}=x"}
-        self.assertEqual(self.get("/api/me", headers=newest), (401, LOG_IN))
+        # A second session cookie can only come from another site under the same parent
+        # domain, such as another *.sslip.io host. Neither is used, so that site cannot
+        # swap in its own account.
+        other = f"{COOKIE_NAME}={self.sign_up('b@uta.edu')}"
+        for header in [
+            f"{session}; {other}",
+            f"{other}; {session}",
+            f"{COOKIE_NAME}=old; {session}",
+            f"{session}; {session}",
+        ]:
+            with self.subTest(header=header):
+                self.assertEqual(self.get("/api/me", headers={"Cookie": header}), (401, LOG_IN))
 
     def test_data_routes_need_a_session(self):
         token = self.sign_up()
@@ -693,6 +840,23 @@ class AccountServerTests(unittest.TestCase):
         status, _, _ = self.request("/api/quiz", payload, token, {"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
         self.assertEqual(self.prompts, [])
+
+    def test_large_refused_upload_still_gets_its_reply(self):
+        # An upload is megabytes of base64. If the server replied without reading it all,
+        # closing the socket would reset the connection before the client read the reply.
+        body = json.dumps({"name": "big.pdf", "data": "A" * (4 * 1024 * 1024)})
+        token = self.sign_up()
+        wrong_type = (415, {"error": "Send JSON with Content-Type: application/json."})
+        for credentials, headers, expected in [
+            (None, JSON, (401, LOG_IN)),
+            ("a" * 43, JSON, (401, LOG_IN)),
+            (None, {"Content-Type": "text/plain"}, wrong_type),
+            (token, {"Content-Type": "text/plain"}, wrong_type),
+        ]:
+            with self.subTest(credentials=credentials, headers=headers):
+                status, _, content = self.request("/api/upload", body, credentials, headers)
+                self.assertEqual((status, json.loads(content)), expected)
+        self.assertEqual(len(self.server.documents), 0)
 
     def test_students_only_see_their_own_data(self):
         alice, bob = self.sign_up("a@uta.edu"), self.sign_up("b@uta.edu")

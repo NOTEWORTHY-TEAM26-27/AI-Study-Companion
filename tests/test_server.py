@@ -497,6 +497,11 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(status, 400)
                 self.assertIn("error", json.loads(content))
 
+    def test_deeply_nested_json_is_bad_input(self):
+        # json raises RecursionError, a RuntimeError, which would otherwise become a 503.
+        status, content = self.request("/api/upload", "[" * 5000)
+        self.assertEqual((status, json.loads(content)), (400, {"error": "Send a JSON object."}))
+
     def test_invalid_length_returns_json_error(self):
         # Send no body: the server replies without reading it, and closing a socket with
         # unread bytes makes Windows reset the connection before the client reads the reply.

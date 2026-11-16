@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from .accounts import COOKIE_NAME, AccountError, Accounts, accounts_from_env
+from .accounts import AccountError, Accounts, accounts_from_env
 from .attempts import AttemptStore
 from .core import build_prompt, extract_passages
 from .models import generate_answer
@@ -38,7 +38,7 @@ DATA_ROUTES = {"/api/upload", "/api/ask", "/api/quiz", "/api/quiz/submit"}
 # These exist only when accounts are on (CLASS_CODE is set).
 ACCOUNT_ROUTES = {"/api/signup", "/api/login", "/api/logout"}
 MAX_ACCOUNT_BYTES = 16 * 1024
-# A refused request's body up to this size is read first, so the reply is not lost.
+# A refused request's body is read and dropped in pieces of this size, so the reply is not lost.
 DRAIN_BYTES = 64 * 1024
 LOG_IN = "Log in to continue."
 PUBLIC_QUESTION_FIELDS = {
@@ -102,14 +102,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _session_token(self) -> str | None:
         # Split by hand: SimpleCookie drops every cookie if any other cookie for this host
-        # has a value it does not accept, such as JSON or a space. The browser lists the
-        # newest cookie of a name last, so the last match wins.
-        token = None
+        # has a value it does not accept, such as JSON or a space.
+        wanted = self.server.accounts.cookie_name
+        tokens = []
         for part in self.headers.get("Cookie", "").split(";"):
             name, _, value = part.strip().partition("=")
-            if name == COOKIE_NAME:
-                token = value
-        return token
+            if name == wanted:
+                tokens.append(value)
+        # The server sets one cookie for this host only. A second one was set by another
+        # site under the same parent domain, so neither is trusted.
+        return tokens[0] if len(tokens) == 1 else None
 
     def _account(self) -> dict | None:
         """Return the logged-in account, or None when logged out or accounts are off."""
@@ -118,14 +120,19 @@ class Handler(BaseHTTPRequestHandler):
         return self.server.accounts.current(self._session_token())
 
     def _drain(self) -> None:
-        # Replying without reading the body can reset the connection before the
-        # client reads the reply, so read and discard a small body first.
+        # Replying without reading the body can reset the connection before the client
+        # reads the reply, so read and discard the body first, up to the request limit.
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            remaining = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             return
-        if 0 < length <= DRAIN_BYTES:
-            self.rfile.read(length)
+        if remaining > MAX_REQUEST_BYTES:
+            return
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, DRAIN_BYTES))
+            if not chunk:
+                break
+            remaining -= len(chunk)
 
     def _reject(self, status: int, message: str) -> None:
         self._drain()
@@ -262,7 +269,11 @@ class Handler(BaseHTTPRequestHandler):
             if length > MAX_REQUEST_BYTES:
                 self._json(413, {"error": "Request is too large. PDF limit is 12 MB."})
                 return
-            payload = json.loads(self.rfile.read(length))
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except RecursionError:
+                # Deep nesting is bad input; as a RuntimeError it would become a 503.
+                raise ValueError("Send a JSON object.") from None
             if not isinstance(payload, dict):
                 raise ValueError("Send a JSON object.")
             if path == "/api/signup":
