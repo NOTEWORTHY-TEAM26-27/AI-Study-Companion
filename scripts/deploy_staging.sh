@@ -26,7 +26,12 @@ git pull --ff-only --quiet origin main
 if ! grep -Eq "^POSTGRES_PASSWORD=[\"']?[^\"'[:space:]]" .env; then
   if docker volume inspect "$(basename "$PWD")_database" >/dev/null 2>&1; then
     echo "POSTGRES_PASSWORD is missing from .env, but the database already exists." >&2
-    echo "Put the old password back in .env (see deploy/STAGING.md)." >&2
+    echo "Put the old password back in .env, or set a new one (deploy/STAGING.md, Password)." >&2
+    exit 1
+  fi
+  # Made in its own step, so a failed openssl stops the script before .env changes.
+  if ! password=$(openssl rand -hex 24) || [ ${#password} -ne 48 ]; then
+    echo "Could not make a database password with openssl, so .env was not changed." >&2
     exit 1
   fi
   sed -i '/^POSTGRES_PASSWORD=/d' .env
@@ -34,7 +39,8 @@ if ! grep -Eq "^POSTGRES_PASSWORD=[\"']?[^\"'[:space:]]" .env; then
   if [ -s .env ] && [ -n "$(tail -c 1 .env)" ]; then
     echo >>.env
   fi
-  printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >>.env
+  printf 'POSTGRES_PASSWORD=%s\n' "$password" >>.env
+  unset password
   echo "Added a new POSTGRES_PASSWORD to .env."
 fi
 # .env holds the database password and the model key, so only deploy can read it.

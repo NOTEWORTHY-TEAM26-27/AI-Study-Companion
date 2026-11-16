@@ -25,6 +25,13 @@ CONNECT_TIMEOUT = 5
 # Most connections one app process opens at once; other requests wait their turn. Staging
 # allows 20 (compose.staging.yaml), which leaves room for backups and psql.
 MAX_CONNECTIONS = 10
+# Seconds a request waits for one of those connections before it gets a 503.
+SLOT_TIMEOUT = 5
+# Milliseconds a statement may wait for a lock, and may run in all, before PostgreSQL stops
+# it and the request gets a 503. Without them, a lock held by a psql session left in an
+# open transaction would hold every request, and then every connection, until released.
+LOCK_TIMEOUT_MS = 5000
+STATEMENT_TIMEOUT_MS = 10000
 TABLES = (
     """CREATE TABLE IF NOT EXISTS accounts (
         id text PRIMARY KEY,
@@ -78,7 +85,8 @@ class Database:
     Each operation connects, runs in one transaction, commits and closes. On the Docker
     network a connection takes a few milliseconds, and it keeps things simple: threads of
     the threaded HTTP server never share a connection, and a database restart leaves no
-    broken connection behind. A semaphore caps how many are open at once.
+    broken connection behind. A semaphore caps how many are open at once, and every wait
+    has a time limit, so a stuck database gives 503s instead of hanging requests.
     """
 
     def __init__(self, url: str):
@@ -102,16 +110,27 @@ class Database:
     def connect(self):
         """Yield a connection in a transaction that commits on success and rolls back on error.
 
-        Driver errors become RuntimeError, which the server answers with 503. The URL and
-        query values are never logged.
+        Driver errors, timeouts included, become RuntimeError, which the server answers
+        with 503. The URL and query values are never logged.
         """
-        with self.slots:
-            try:
-                with self.psycopg.connect(self.url, connect_timeout=CONNECT_TIMEOUT) as conn:
-                    yield conn
-            except self.psycopg.Error as exc:
-                LOGGER.error("Database error: %s (SQLSTATE %s)", type(exc).__name__, exc.sqlstate)
-                raise RuntimeError(UNAVAILABLE) from exc
+        if not self.slots.acquire(timeout=SLOT_TIMEOUT):
+            LOGGER.error("Database error: no free connection after %s seconds", SLOT_TIMEOUT)
+            raise RuntimeError(UNAVAILABLE)
+        try:
+            with self.psycopg.connect(self.url, connect_timeout=CONNECT_TIMEOUT) as conn:
+                # Set for this transaction only. As connection options they would replace
+                # any options in the URL, such as the tests' search_path.
+                conn.execute(
+                    "SELECT set_config('lock_timeout', %s, true),"
+                    " set_config('statement_timeout', %s, true)",
+                    (f"{LOCK_TIMEOUT_MS}ms", f"{STATEMENT_TIMEOUT_MS}ms"),
+                )
+                yield conn
+        except self.psycopg.Error as exc:
+            LOGGER.error("Database error: %s (SQLSTATE %s)", type(exc).__name__, exc.sqlstate)
+            raise RuntimeError(UNAVAILABLE) from exc
+        finally:
+            self.slots.release()
 
 
 class PostgresAccountStore:

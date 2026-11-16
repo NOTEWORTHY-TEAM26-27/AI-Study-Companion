@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Back up staging's saved files (SCRUM-105). Run on the staging Droplet as deploy from the repo folder.
-# Copies /data/documents (uploaded PDFs, issued quizzes, saved attempts) from the running app container
-# to ~/backups. It only reads the volume and never changes or deletes old backups.
+# Copies /data/documents (uploaded PDFs and their passages) from the running app container to
+# ~/backups. It only reads the volume and never changes or deletes old backups. Quizzes and attempts
+# are in the database now (backup_db.sh); the quiz and attempt files here are from before it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -63,7 +64,8 @@ mv "$partial" "$archive"
 trap - EXIT
 
 echo "Saved $archive ($(du -h "$archive" | cut -f1))"
-echo "It holds $documents documents, $quizzes issued quizzes, and $attempts saved attempts."
+echo "It holds $documents documents, plus $quizzes quiz and $attempts attempt files from before the database."
+echo "Current quizzes and attempts are in the database backups (scripts/backup_db.sh)."
 
 shopt -s nullglob
 backups=("$backup_dir"/noteworthy-documents-*.tar.gz)

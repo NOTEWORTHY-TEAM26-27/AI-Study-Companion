@@ -428,6 +428,9 @@ way, on the `documents` Docker volume; moving them is later work.
   keeps one attempt per learner and quiz, even when two submits arrive together or
   several app processes run, and the unique email column does the same for accounts.
   Each new login also deletes expired sessions.
+- A request waits at most 5 seconds for a free connection, and each query at most 5
+  seconds for a lock and 10 seconds in all. Past that the request gets a 503 instead of
+  hanging, for example while a `psql` session holds a table lock.
 - Existing files are not moved into the database. The quiz attempts saved as files on
   staging before this change were test data; they stay in the `documents` volume,
   unused.
@@ -452,6 +455,8 @@ service. To run them on your computer with Docker:
 ```bash
 docker run -d --name noteworthy-test-db -e POSTGRES_PASSWORD=test \
   -p 127.0.0.1:55432:5432 postgres:16-alpine
+# The first start runs a setup server that takes no TCP connections; wait for the real one.
+until docker exec noteworthy-test-db pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; do sleep 1; done
 TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/postgres make test PYTHON=python
 docker rm -f noteworthy-test-db
 ```

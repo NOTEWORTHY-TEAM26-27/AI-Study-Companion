@@ -7,13 +7,15 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
 from noteworthy_app.accounts import FileAccountStore
 from noteworthy_app.attempts import AttemptStore
-from noteworthy_app.database import PostgresAccountStore, PostgresAttemptStore
+from noteworthy_app.database import Database, PostgresAccountStore, PostgresAttemptStore
 from noteworthy_app.server import create_server
 from tests.fixtures import study_pdf
 from tests.postgres import HAVE_PSYCOPG, PostgresTestCase, needs_postgres
@@ -57,6 +59,67 @@ class StoreChoiceTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "^The database is not available"),
         ):
             create_server("127.0.0.1", 0, data_dir=self.data_dir)
+
+
+@needs_postgres
+class DatabaseLimitTests(PostgresTestCase):
+    """A stuck database gives a 503 error after a short wait, not a request that hangs."""
+
+    KEY = "1" * 64
+    UNAVAILABLE = "^The database is not available"
+
+    def test_held_lock_is_an_error_after_the_lock_timeout(self):
+        import psycopg
+
+        store = PostgresAccountStore(self.database)
+        # Like a psql session left in a transaction that locked the table.
+        other = psycopg.connect(self.database_url)
+        self.addCleanup(other.close)
+        other.execute("LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE")
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            with (
+                mock.patch("noteworthy_app.database.LOCK_TIMEOUT_MS", 300),
+                self.assertLogs("noteworthy_app.database", level="ERROR") as logs,
+                self.assertRaisesRegex(RuntimeError, self.UNAVAILABLE),
+            ):
+                pool.submit(store.find_session, self.KEY).result(timeout=30)
+        finally:
+            # Release the lock first, so a call that still waits can finish.
+            other.rollback()
+            pool.shutdown()
+        self.assertIn("LockNotAvailable", logs.output[0])
+        self.assertIsNone(store.find_session(self.KEY))
+
+    def test_long_statement_is_stopped(self):
+        started = time.monotonic()
+        with (
+            mock.patch("noteworthy_app.database.STATEMENT_TIMEOUT_MS", 300),
+            self.assertLogs("noteworthy_app.database", level="ERROR") as logs,
+            self.assertRaisesRegex(RuntimeError, self.UNAVAILABLE),
+        ):
+            self.execute("SELECT pg_sleep(20)")
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertIn("QueryCanceled", logs.output[0])
+        # The limits are for that transaction only, not the URL's options.
+        self.assertEqual(self.execute("SELECT current_setting('lock_timeout')"), [("5s",)])
+        self.assertEqual(self.execute("SHOW search_path"), [(self.schema,)])
+
+    def test_wait_for_a_free_connection_is_limited(self):
+        with mock.patch("noteworthy_app.database.MAX_CONNECTIONS", 1):
+            database = Database(self.database_url)
+        store = PostgresAccountStore(database)
+        with (
+            mock.patch("noteworthy_app.database.SLOT_TIMEOUT", 0.2),
+            self.assertLogs("noteworthy_app.database", level="ERROR") as logs,
+            self.assertRaisesRegex(RuntimeError, self.UNAVAILABLE),
+            # This holds the only connection, so the store call has to wait for it.
+            database.connect(),
+        ):
+            store.find_session(self.KEY)
+        self.assertIn("no free connection", logs.output[0])
+        # Each finished call gives its connection back.
+        self.assertIsNone(store.find_session(self.KEY))
 
 
 @needs_postgres

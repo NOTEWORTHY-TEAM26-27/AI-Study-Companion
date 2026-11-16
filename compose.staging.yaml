@@ -27,6 +27,10 @@ services:
       - effective_cache_size=128MB
       - -c
       - max_connections=20
+      # Closes a session left idle in an open transaction (a psql with a forgotten BEGIN),
+      # so its locks cannot block the app for long.
+      - -c
+      - idle_in_transaction_session_timeout=60s
 
   caddy:
     image: caddy:2

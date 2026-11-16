@@ -578,6 +578,27 @@ class AccountsTests(unittest.TestCase):
             # Ended windows are dropped, so the table holds only recent emails.
             self.assertEqual(len(self.accounts.tries), 0)
 
+    def test_database_errors_do_not_count_toward_the_login_limit(self):
+        self.accounts.sign_up("student@uta.edu", PASSWORD, CLASS_CODE)
+        down = RuntimeError("The database is not available. Try again later.")
+        with mock.patch.object(self.accounts.store, "find_account", side_effect=down):
+            for _ in range(6):
+                with self.assertRaisesRegex(RuntimeError, "^The database is not available"):
+                    self.accounts.log_in("student@uta.edu", PASSWORD)
+        self.assertEqual(self.accounts.tries, {})
+        # Once the database is back, the right password works.
+        self.assertEqual(
+            self.accounts.log_in("student@uta.edu", PASSWORD)[0], {"email": "student@uta.edu"}
+        )
+        # Wrong passwords before an error still count.
+        for _ in range(4):
+            self.assert_status(401, "student@uta.edu", "wrong password")
+        with mock.patch.object(self.accounts.store, "find_account", side_effect=down):
+            with self.assertRaises(RuntimeError):
+                self.accounts.log_in("student@uta.edu", PASSWORD)
+        self.assert_status(401, "student@uta.edu", "wrong password")
+        self.assert_status(429, "student@uta.edu", PASSWORD)
+
     def test_parallel_logins_cannot_pass_the_limit(self):
         barrier = threading.Barrier(8)
         results = []
@@ -990,6 +1011,17 @@ class AccountServerTests(unittest.TestCase):
             with self.subTest(credentials=credentials, headers=headers):
                 status, _, content = self.request("/api/upload", body, credentials, headers)
                 self.assertEqual((status, json.loads(content)), expected)
+        self.assertEqual(len(self.server.documents), 0)
+
+    def test_database_error_on_a_large_upload_still_gets_its_reply(self):
+        # The session lookup fails before the body is read, as when the database is down.
+        body = json.dumps({"name": "big.pdf", "data": "A" * (8 * 1024 * 1024)})
+        token = self.sign_up()
+        down = RuntimeError("The database is not available. Try again later.")
+        with mock.patch.object(self.server.accounts.store, "find_session", side_effect=down):
+            for _ in range(3):
+                status, _, content = self.request("/api/upload", body, token, JSON)
+                self.assertEqual((status, json.loads(content)), (503, {"error": str(down)}))
         self.assertEqual(len(self.server.documents), 0)
 
     def test_students_only_see_their_own_data(self):

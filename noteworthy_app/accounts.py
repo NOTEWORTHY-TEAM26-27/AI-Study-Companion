@@ -284,7 +284,13 @@ class Accounts:
         email = email.strip().lower()
         key = hashlib.sha256(_utf8(email)).digest()
         self._count_try(key)
-        account = self.store.find_account(email)
+        try:
+            account = self.store.find_account(email)
+        except RuntimeError:
+            # Storage could not be read (for example the database is down), so no password
+            # was checked and the try does not count.
+            self._return_try(key)
+            raise
         stored = account["password_hash"] if account is not None else self.dummy_hash
         # One message for an unknown email and a wrong password, so neither is revealed.
         if not verify_password(password, stored) or account is None:
@@ -309,6 +315,15 @@ class Accounts:
             if count >= LOGIN_LIMIT:
                 raise AccountError(429, TOO_MANY)
             self.tries[key] = (count + 1, start)
+
+    def _return_try(self, key: bytes) -> None:
+        """Take back one try that _count_try counted."""
+        with self.tries_lock:
+            count, start = self.tries.get(key, (0, 0.0))
+            if count > 1:
+                self.tries[key] = (count - 1, start)
+            else:
+                self.tries.pop(key, None)
 
     def log_out(self, token: str | None) -> None:
         if isinstance(token, str) and TOKEN.fullmatch(token):

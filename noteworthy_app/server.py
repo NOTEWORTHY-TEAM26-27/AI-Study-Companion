@@ -258,7 +258,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200, {"status": "logged out"}, accounts.cookie(None))
                     return
                 if path not in ACCOUNT_ROUTES:
-                    account = self._account()
+                    try:
+                        account = self._account()
+                    except RuntimeError as exc:
+                        # The body is not read yet, so drain it like the 401 below.
+                        self._reject(503, str(exc))
+                        return
                     if account is None:
                         self._reject(401, LOG_IN)
                         return

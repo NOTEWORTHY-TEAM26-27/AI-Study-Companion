@@ -34,6 +34,7 @@ class PostgresTestCase(unittest.TestCase):
         with psycopg.connect(TEST_DATABASE_URL) as conn:
             conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
         cls.addClassCleanup(cls.drop_schema, schema)
+        cls.schema = schema
         # The schema comes first on the search path, so the app makes its tables there.
         cls.database_url = make_conninfo(TEST_DATABASE_URL, options=f"-c search_path={schema}")
         cls.database = Database(cls.database_url)

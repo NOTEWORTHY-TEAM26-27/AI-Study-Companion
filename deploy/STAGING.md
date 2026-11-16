@@ -108,8 +108,9 @@ cd ~/noteworthy
 ```
 
 The script saves `~/backups/noteworthy-documents-<UTC time>.tar.gz`, checks that the archive reads
-back, and prints how many documents, quizzes, and attempts it holds. It only reads the volume and
-never deletes old backups. Delete old ones by hand when they are no longer needed.
+back, and prints how many documents it holds, and how many quiz and attempt files from before the
+database. Current quizzes and attempts are only in the database backups. It only reads the volume
+and never deletes old backups. Delete old ones by hand when they are no longer needed.
 
 Copy each backup off the server. On your own computer, run the `scp` line the script prints:
 
@@ -166,7 +167,11 @@ volume (see Backups). The database publishes no port; only the app and
 `docker compose exec` can reach it.
 
 The container is limited to 256 MB, with small PostgreSQL memory settings and at most 20
-connections (`compose.staging.yaml`). The app opens at most 10 at once.
+connections (`compose.staging.yaml`). The app opens at most 10 at once. A request waits at
+most 5 seconds for one of them, and a query at most 5 seconds for a lock and 10 seconds in
+all; past that the request gets a 503 instead of hanging. PostgreSQL also closes a session
+that leaves a transaction open and idle for more than a minute, such as a `psql` with a
+forgotten `BEGIN`, so its locks cannot block the app for long.
 
 ### Password
 
@@ -176,17 +181,23 @@ password only when the `database` volume is created, so:
 
 - Never change or delete the `POSTGRES_PASSWORD` line in `.env`. If it is missing while the
   volume exists, the deploy script stops instead of making a new one.
-- To change the password, or to set one again after the line was lost, set it inside the
-  database first (the container's own `psql` needs no password), then put the same value in
-  `.env` and run the deploy script. Use only letters, digits and hyphens, since the app puts it
-  in a URL:
+- To change the password, or to set one again after the line was lost, put the new value in
+  `.env` first, then set the same value inside the database (the container's own `psql` needs
+  no password), then run the deploy script. `.env` comes first because Compose stops every
+  command, `exec` included, while the `POSTGRES_PASSWORD` line is missing; editing `.env`
+  does not change the running containers. Use only letters, digits and hyphens, since the app
+  puts the password in a URL. `openssl rand -hex 24` prints a new one to copy:
 
   ```bash
   cd ~/noteworthy
-  docker compose -f compose.yaml -f compose.staging.yaml exec db psql -U noteworthy -d noteworthy -c '\password noteworthy'
+  openssl rand -hex 24
   nano .env
+  docker compose -f compose.yaml -f compose.staging.yaml exec db psql -U noteworthy -d noteworthy -c '\password noteworthy'
   ./scripts/deploy_staging.sh
   ```
+
+  In `nano`, set the `POSTGRES_PASSWORD=` line to the new value. `\password` asks for it
+  twice; paste the same value.
 
 ### First deploy with the database
 
@@ -226,28 +237,38 @@ scp deploy@<STAGING_HOST>:backups/noteworthy-db-<UTC time>.sql.gz .
 A restore replaces the four tables with the backup's contents, so anything saved after the
 backup is lost.
 
-1. Run `./scripts/backup_db.sh` so the current data is not lost.
-2. If the backup you need is not on the server, copy it there from your own computer:
+1. Copy the dump you will restore out of `~/backups` first. `backup_db.sh`, by hand or from
+   cron, keeps only the newest 7 dumps there, so it could delete an older one before you load
+   it:
 
    ```bash
-   scp noteworthy-db-<UTC time>.sql.gz deploy@<STAGING_HOST>:backups/
+   cp ~/backups/noteworthy-db-<UTC time>.sql.gz ~/restore.sql.gz
    ```
+
+   If the dump is not on the server, copy it from your own computer to the same place
+   instead, then run `chmod 600 ~/restore.sql.gz` on the server:
+
+   ```bash
+   scp noteworthy-db-<UTC time>.sql.gz deploy@<STAGING_HOST>:restore.sql.gz
+   ```
+2. Run `./scripts/backup_db.sh` so the current data is not lost.
 3. Stop the app, load the backup in one transaction (nothing changes if it fails), and start
    the app again:
 
    ```bash
    cd ~/noteworthy
    docker compose -f compose.yaml -f compose.staging.yaml stop app
-   gunzip -c ~/backups/noteworthy-db-<UTC time>.sql.gz \
+   gunzip -c ~/restore.sql.gz \
      | docker compose -f compose.yaml -f compose.staging.yaml exec -T db \
        psql -U noteworthy -d noteworthy -v ON_ERROR_STOP=1 --single-transaction
    docker compose -f compose.yaml -f compose.staging.yaml start app
    ```
-4. Check the row counts:
+4. Check the row counts, then delete `~/restore.sql.gz`:
 
    ```bash
    docker compose -f compose.yaml -f compose.staging.yaml exec db psql -U noteworthy -d noteworthy \
      -c 'SELECT (SELECT count(*) FROM accounts) AS accounts, (SELECT count(*) FROM attempts) AS attempts'
+   rm ~/restore.sql.gz
    ```
 
 On a new Droplet, run `./scripts/deploy_staging.sh` first, so the database exists, then
