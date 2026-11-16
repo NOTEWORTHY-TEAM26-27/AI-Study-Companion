@@ -1,4 +1,4 @@
-"""File-backed quizzes and anonymous progress for the single-process app."""
+"""File-backed quizzes and learner progress for the single-process app."""
 
 import json
 import logging
@@ -30,13 +30,15 @@ class AttemptStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(path, json.dumps(record).encode())
 
-    def issue(self, document_id: str, questions: list[dict]) -> dict:
+    def issue(self, document_id: str, questions: list[dict], owner: str | None = None) -> dict:
         quiz_id = uuid4().hex
         quiz = {"quiz_id": quiz_id, "document_id": document_id, "questions": questions}
+        if owner is not None:
+            quiz["owner"] = owner
         self._save(self.directory / "quizzes" / f"{quiz_id}.json", quiz)
         return quiz
 
-    def quiz(self, quiz_id: str) -> dict:
+    def quiz(self, quiz_id: str, owner: str | None = None) -> dict:
         """Return an issued quiz with its keys; the server filters what it sends."""
         quiz_id = _identifier(quiz_id)
         try:
@@ -53,8 +55,12 @@ class AttemptStore:
             or not isinstance(quiz.get("document_id"), str)
             or not isinstance(quiz.get("questions"), list)
             or not all(isinstance(question, dict) for question in quiz["questions"])
+            or not isinstance(quiz.get("owner"), str | None)
         ):
             raise RuntimeError("Saved quiz could not be read.")
+        # Owner is an account ID, or None without accounts. Another student's quiz is not found.
+        if quiz.get("owner") != owner:
+            raise LookupError("Quiz not found. Generate a new quiz.")
         return quiz
 
     @staticmethod
@@ -91,7 +97,9 @@ class AttemptStore:
             raise ValueError("Invalid topic total.")
         return record
 
-    def submit(self, quiz_id: str, learner_id: str, answers: list) -> dict:
+    def submit(
+        self, quiz_id: str, learner_id: str, answers: list, owner: str | None = None
+    ) -> dict:
         quiz_id, learner_id = _identifier(quiz_id), _identifier(learner_id)
         path = self.directory / "attempts" / learner_id / f"{quiz_id}.json"
         with self.lock:
@@ -100,7 +108,7 @@ class AttemptStore:
                     return self._read_attempt(path, learner_id)
                 except (ValueError, TypeError, KeyError) as exc:
                     raise RuntimeError("Saved attempt could not be read.") from exc
-            quiz = self.quiz(quiz_id)
+            quiz = self.quiz(quiz_id, owner)
             result = {
                 **grade_quiz(quiz["questions"], answers),
                 "quiz_id": quiz_id,

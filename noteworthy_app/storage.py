@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import re
 import tempfile
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from pathlib import Path
 from .core import Passage
 
 LOGGER = logging.getLogger(__name__)
+OWNER = re.compile(r"[0-9a-f]{32}")
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -23,12 +25,19 @@ def _atomic_write(path: Path, data: bytes) -> None:
         Path(temporary.name).unlink(missing_ok=True)
 
 
-def save_document(data_dir: Path, name: str, pdf: bytes, passages: list[Passage]) -> str:
+def save_document(
+    data_dir: Path, name: str, pdf: bytes, passages: list[Passage], owner: str | None = None
+) -> str:
+    """Save a PDF and its passages; return its ID. owner is a student's account ID."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    document_id = hashlib.sha256(pdf).hexdigest()[:16]
-    metadata = json.dumps(
-        {"name": name, "passages": [asdict(passage) for passage in passages]}
-    ).encode()
+    record = {"name": name, "passages": [asdict(passage) for passage in passages]}
+    if owner is None:
+        document_id = hashlib.sha256(pdf).hexdigest()[:16]
+    else:
+        # The owner is part of the ID, so two students with the same PDF never share files.
+        document_id = hashlib.sha256(owner.encode() + b":" + pdf).hexdigest()[:16]
+        record["owner"] = owner
+    metadata = json.dumps(record).encode()
     _atomic_write(data_dir / f"{document_id}.pdf", pdf)
     # Publish metadata last: startup ignores PDFs left by an interrupted upload.
     _atomic_write(data_dir / f"{document_id}.json", metadata)
@@ -44,7 +53,8 @@ def uploaded_at(data_dir: Path, document_id: str) -> str | None:
     return datetime.fromtimestamp(modified, timezone.utc).isoformat()
 
 
-def load_documents(data_dir: Path) -> dict[str, tuple[str, list[Passage]]]:
+def load_documents(data_dir: Path) -> dict[str, tuple[str, list[Passage], str | None]]:
+    """Return each stored document's name, passages and owner (None before accounts)."""
     data_dir.mkdir(parents=True, exist_ok=True)
     documents = {}
     for path in sorted(data_dir.glob("*.json")):
@@ -65,7 +75,11 @@ def load_documents(data_dir: Path) -> dict[str, tuple[str, list[Passage]]]:
                 for p in passages
             ):
                 raise ValueError("Invalid passage metadata.")
-            documents[path.stem] = (name, passages)
+            # Ownership is read from the metadata, so an old document can be given to a student.
+            owner = metadata.get("owner")
+            if owner is not None and (not isinstance(owner, str) or not OWNER.fullmatch(owner)):
+                raise ValueError("Invalid document owner.")
+            documents[path.stem] = (name, passages, owner)
         except (OSError, ValueError, TypeError, KeyError):
             LOGGER.warning("Skipping unreadable stored document %s", path.name)
     return documents
