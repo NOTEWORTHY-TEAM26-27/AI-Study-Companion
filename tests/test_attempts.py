@@ -8,17 +8,36 @@ from pathlib import Path
 from unittest import mock
 
 from noteworthy_app.attempts import AttemptStore
+from noteworthy_app.database import Database, PostgresAttemptStore
+from tests.postgres import PostgresTestCase, needs_postgres
 from tests.test_grading import questions
 
 LEARNER = "a" * 32
 OTHER = "b" * 32
 
 
-class AttemptTests(unittest.TestCase):
+class AttemptStoreContract:
+    """Checks every attempt store must pass; each subclass says how to make one."""
+
+    # Where the store reads the time and logs warnings.
+    CLOCK = "noteworthy_app.attempts.datetime"
+    LOGGER = "noteworthy_app.attempts"
+
+    def make_store(self):
+        """Return a new store on the same saved data."""
+        raise NotImplementedError
+
+    def save_raw_attempt(self, learner_id, quiz_id, record):
+        """Save record as that attempt without any checks, replacing a saved one."""
+        raise NotImplementedError
+
+    def save_raw_quiz(self, quiz_id, saved):
+        """Save a quiz for doc1 whose questions are saved, which can be any JSON value."""
+        raise NotImplementedError
+
     def setUp(self):
-        directory = self.enterContext(tempfile.TemporaryDirectory())
-        self.directory = Path(directory)
-        self.store = AttemptStore(self.directory)
+        super().setUp()
+        self.store = self.make_store()
         self.quiz = self.store.issue("doc1", questions())
 
     def submit(self, learner=LEARNER, answers=None):
@@ -29,15 +48,15 @@ class AttemptTests(unittest.TestCase):
         )
 
     def test_issued_quiz_and_attempt_survive_a_new_store(self):
-        self.store = AttemptStore(self.directory)
+        self.store = self.make_store()
         result = self.submit()
         self.assertEqual((result["correct"], result["total"]), (2, 4))
         self.assertEqual(result["document_id"], "doc1")
         self.assertTrue(result["created_at"].endswith("+00:00"))
-        progress = AttemptStore(self.directory).progress(LEARNER)
+        progress = self.make_store().progress(LEARNER)
         self.assertEqual(set(progress), {"topic_scores"})
         self.assertEqual(
-            AttemptStore(self.directory).submit(self.quiz["quiz_id"], LEARNER, [None] * 4), result
+            self.make_store().submit(self.quiz["quiz_id"], LEARNER, [None] * 4), result
         )
         self.assertEqual(progress["topic_scores"]["Numbers"], {"correct": 2, "total": 2})
 
@@ -52,13 +71,199 @@ class AttemptTests(unittest.TestCase):
         selected = self.store.progress(LEARNER, "doc2")
         self.assertEqual(set(selected), {"topic_scores"})
         self.assertEqual(selected["topic_scores"]["Biology"], {"correct": 1, "total": 2})
+        self.assertEqual(self.store.progress(LEARNER, "doc3"), {"topic_scores": {}})
+
+    def test_progress_adds_up_every_attempt(self):
+        second = self.store.issue("doc1", questions())
+        third = self.store.issue("doc2", questions())
+        self.submit()
+        self.store.submit(second["quiz_id"], LEARNER, ["B", "False", "red blood cells", None])
+        self.store.submit(third["quiz_id"], LEARNER, ["A", "True", None, "photosynthesis"])
+        self.store.submit(third["quiz_id"], OTHER, ["B", "True", "Red blood cells", None])
+        self.assertEqual(
+            self.store.progress(LEARNER),
+            {
+                "topic_scores": {
+                    "Numbers": {"correct": 4, "total": 6},
+                    "Biology": {"correct": 2, "total": 6},
+                }
+            },
+        )
+        self.assertEqual(
+            self.store.progress(LEARNER, "doc1")["topic_scores"],
+            {"Numbers": {"correct": 3, "total": 4}, "Biology": {"correct": 1, "total": 4}},
+        )
+        self.assertEqual(
+            self.store.progress(OTHER)["topic_scores"],
+            {"Numbers": {"correct": 2, "total": 2}, "Biology": {"correct": 1, "total": 2}},
+        )
 
     def test_duplicate_and_concurrent_submit_return_one_saved_attempt(self):
+        # Different answers, so a second saved attempt would show.
+        answers = [["B", "True", None, None], [None] * 4]
         with ThreadPoolExecutor(max_workers=6) as pool:
-            results = list(pool.map(lambda _: self.submit(), range(12)))
+            results = list(
+                pool.map(lambda index: self.submit(answers=answers[index % 2]), range(12))
+            )
         self.assertTrue(all(item == results[0] for item in results))
-        self.assertEqual(self.submit(answers=[None] * 4), results[0])
+        self.assertEqual(self.submit(answers=["B", "True", "Red blood cells", None]), results[0])
         self.assertEqual(self.store.progress(LEARNER)["topic_scores"]["Numbers"]["total"], 2)
+        self.assertEqual(len(self.store.history(LEARNER)), 1)
+
+    def test_malformed_submission_does_not_save_an_attempt(self):
+        with self.assertRaises(ValueError):
+            self.submit(answers=["B"])
+        self.assertEqual(self.store.progress(LEARNER), {"topic_scores": {}})
+        with self.assertRaises(LookupError):
+            self.store.attempt(self.quiz["quiz_id"], LEARNER)
+
+    def test_issued_quiz_can_be_read_again_with_its_keys(self):
+        self.assertEqual(self.make_store().quiz(self.quiz["quiz_id"]), self.quiz)
+        self.assertNotIn("owner", self.quiz)
+        with self.assertRaises(LookupError):
+            self.store.quiz("f" * 32)
+        for name, saved in [("c" * 32, "not a list"), ("d" * 32, [1, 2])]:
+            self.save_raw_quiz(name, saved)
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                self.store.quiz(name)
+        # A saved quiz that cannot be read is reported, not graded as a bad submission.
+        with self.assertRaises(RuntimeError):
+            self.store.submit("c" * 32, LEARNER, [None] * 4)
+
+    def test_quizzes_are_found_only_by_their_owner(self):
+        owned = self.store.issue("doc1", questions(), owner=LEARNER)
+        self.assertEqual(owned["owner"], LEARNER)
+        self.assertEqual(self.make_store().quiz(owned["quiz_id"], LEARNER), owned)
+        # Another student's quiz, and a quiz from before accounts, are not found.
+        for quiz_id, owner in [
+            (owned["quiz_id"], None),
+            (owned["quiz_id"], OTHER),
+            (self.quiz["quiz_id"], LEARNER),
+        ]:
+            with self.subTest(quiz_id=quiz_id, owner=owner):
+                with self.assertRaises(LookupError):
+                    self.store.quiz(quiz_id, owner)
+                with self.assertRaises(LookupError):
+                    self.store.submit(quiz_id, owner or OTHER, [None] * 4, owner)
+        result = self.store.submit(owned["quiz_id"], LEARNER, ["B", "True", None, None], LEARNER)
+        self.assertEqual((result["learner_id"], result["correct"]), (LEARNER, 2))
+        self.assertEqual(self.store.history(OTHER), [])
+        self.assertEqual(self.store.progress(OTHER), {"topic_scores": {}})
+
+    def test_saved_attempt_is_returned_as_submitted(self):
+        result = self.submit()
+        self.assertEqual(self.make_store().attempt(self.quiz["quiz_id"], LEARNER), result)
+        self.assertEqual(
+            list(self.store.attempt(self.quiz["quiz_id"], LEARNER)["topic_scores"]),
+            ["Numbers", "Biology"],
+        )
+        with self.assertRaises(LookupError):
+            self.store.attempt(self.quiz["quiz_id"], OTHER)
+        with self.assertRaises(LookupError):
+            self.store.attempt("f" * 32, LEARNER)
+        self.save_raw_attempt(LEARNER, self.quiz["quiz_id"], {**result, "score": "100"})
+        with self.assertRaises(RuntimeError):
+            self.store.attempt(self.quiz["quiz_id"], LEARNER)
+        with self.assertRaises(RuntimeError):
+            self.submit()
+
+    def test_history_lists_attempts_newest_first(self):
+        second = self.store.issue("doc2", questions())
+        third, fourth = sorted(
+            (self.store.issue("doc2", questions()) for _ in range(2)),
+            key=lambda quiz: quiz["quiz_id"],
+        )
+        with mock.patch(self.CLOCK) as clock:
+            clock.now.return_value = datetime(2026, 11, 2, 9, 30, tzinfo=timezone.utc)
+            self.store.submit(second["quiz_id"], LEARNER, [None, None, None, "Photosynthesis"])
+            clock.now.return_value = datetime(2026, 11, 1, 9, 30, tzinfo=timezone.utc)
+            self.submit()
+            # Attempts saved at the same time are listed by quiz ID, highest first.
+            clock.now.return_value = datetime(2026, 10, 30, 8, 0, tzinfo=timezone.utc)
+            for quiz in (third, fourth):
+                self.store.submit(quiz["quiz_id"], LEARNER, [None] * 4)
+        history = self.store.history(LEARNER)
+        self.assertEqual(
+            history[:2],
+            [
+                {
+                    "quiz_id": second["quiz_id"],
+                    "document_id": "doc2",
+                    "correct": 1,
+                    "total": 4,
+                    "score": 25.0,
+                    "created_at": "2026-11-02T09:30:00+00:00",
+                },
+                {
+                    "quiz_id": self.quiz["quiz_id"],
+                    "document_id": "doc1",
+                    "correct": 2,
+                    "total": 4,
+                    "score": 50.0,
+                    "created_at": "2026-11-01T09:30:00+00:00",
+                },
+            ],
+        )
+        self.assertEqual(
+            [item["quiz_id"] for item in history[2:]], [fourth["quiz_id"], third["quiz_id"]]
+        )
+        self.assertEqual(self.store.history(OTHER), [])
+
+    def test_unreadable_attempts_are_skipped_without_hiding_valid_ones(self):
+        result = self.submit()
+        for name, record in [
+            ("c" * 32, {"correct": "bad"}),
+            ("d" * 32, [result]),
+            ("e" * 32, {**result, "quiz_id": "e" * 32, "score": None}),
+            # Saved under one quiz ID while naming another.
+            ("f" * 32, result),
+        ]:
+            self.save_raw_attempt(LEARNER, name, record)
+        with self.assertLogs(self.LOGGER, level="WARNING") as logs:
+            history = self.store.history(LEARNER)
+        self.assertEqual(len(logs.output), 4)
+        self.assertEqual([item["quiz_id"] for item in history], [self.quiz["quiz_id"]])
+        with self.assertLogs(self.LOGGER, level="WARNING"):
+            progress = self.store.progress(LEARNER)
+        self.assertEqual(progress["topic_scores"]["Numbers"], {"correct": 2, "total": 2})
+        with self.assertRaisesRegex(RuntimeError, "^Saved attempt could not be read"):
+            self.store.attempt("c" * 32, LEARNER)
+
+    def test_untrusted_identifiers_cannot_select_storage_paths(self):
+        for identifier in ["../outside", "", "A" * 32, None, "a" * 33]:
+            with self.subTest(identifier=identifier):
+                with self.assertRaises(ValueError):
+                    self.store.submit(identifier, LEARNER, [None] * 4)
+                with self.assertRaises(ValueError):
+                    self.store.progress(identifier)
+                with self.assertRaises(ValueError):
+                    self.store.quiz(identifier)
+                with self.assertRaises(ValueError):
+                    self.store.attempt(identifier, LEARNER)
+                with self.assertRaises(ValueError):
+                    self.store.attempt(self.quiz["quiz_id"], identifier)
+                with self.assertRaises(ValueError):
+                    self.store.history(identifier)
+        with self.assertRaises(LookupError):
+            self.store.submit("f" * 32, LEARNER, [None] * 4)
+
+
+class FileAttemptTests(AttemptStoreContract, unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        super().setUp()
+
+    def make_store(self):
+        return AttemptStore(self.directory)
+
+    def save_raw_attempt(self, learner_id, quiz_id, record):
+        folder = self.directory / "attempts" / learner_id
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{quiz_id}.json").write_text(json.dumps(record))
+
+    def save_raw_quiz(self, quiz_id, saved):
+        record = {"quiz_id": quiz_id, "document_id": "doc1", "questions": saved}
+        (self.directory / "quizzes" / f"{quiz_id}.json").write_text(json.dumps(record))
 
     def test_failed_attempt_write_can_be_retried(self):
         (self.directory / "attempts").write_text("not a directory")
@@ -68,20 +273,17 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual(self.store.progress(LEARNER), {"topic_scores": {}})
         self.assertEqual(self.submit()["correct"], 2)
 
-    def test_corrupt_records_are_skipped_without_hiding_valid_progress(self):
+    def test_files_that_are_not_json_are_skipped(self):
         self.submit()
-        folder = self.directory / "attempts" / LEARNER
-        for name, content in [("c" * 32, "{"), ("d" * 32, json.dumps({"correct": "bad"}))]:
-            (folder / f"{name}.json").write_text(content)
+        (self.directory / "attempts" / LEARNER / f"{'c' * 32}.json").write_text("{")
+        (self.directory / "quizzes" / f"{'c' * 32}.json").write_text("{")
         with self.assertLogs("noteworthy_app.attempts", level="WARNING"):
             result = self.store.progress(LEARNER)
-        self.assertEqual(set(result), {"topic_scores"})
         self.assertEqual(result["topic_scores"]["Numbers"], {"correct": 2, "total": 2})
-
-    def test_malformed_submission_does_not_save_an_attempt(self):
-        with self.assertRaises(ValueError):
-            self.submit(answers=["B"])
-        self.assertEqual(self.store.progress(LEARNER), {"topic_scores": {}})
+        with self.assertLogs("noteworthy_app.attempts", level="WARNING"):
+            self.assertEqual(len(self.store.history(LEARNER)), 1)
+        with self.assertRaises(RuntimeError):
+            self.store.quiz("c" * 32)
 
     def test_slow_progress_read_does_not_block_a_new_submission(self):
         self.submit()
@@ -109,76 +311,6 @@ class AttemptTests(unittest.TestCase):
                     release.set()
                 self.assertEqual(set(progress.result(timeout=2)), {"topic_scores"})
 
-    def test_issued_quiz_can_be_read_again_with_its_keys(self):
-        self.assertEqual(AttemptStore(self.directory).quiz(self.quiz["quiz_id"]), self.quiz)
-        with self.assertRaises(LookupError):
-            self.store.quiz("f" * 32)
-        for name, content in [("c" * 32, "{"), ("d" * 32, json.dumps({"quiz_id": "d" * 32}))]:
-            (self.directory / "quizzes" / f"{name}.json").write_text(content)
-            with self.subTest(name=name), self.assertRaises(RuntimeError):
-                self.store.quiz(name)
-        # A saved quiz that cannot be read is reported, not graded as a bad submission.
-        with self.assertRaises(RuntimeError):
-            self.store.submit("c" * 32, LEARNER, [None] * 4)
-
-    def test_saved_attempt_is_returned_as_submitted(self):
-        result = self.submit()
-        self.assertEqual(
-            AttemptStore(self.directory).attempt(self.quiz["quiz_id"], LEARNER), result
-        )
-        with self.assertRaises(LookupError):
-            self.store.attempt(self.quiz["quiz_id"], OTHER)
-        with self.assertRaises(LookupError):
-            self.store.attempt("f" * 32, LEARNER)
-        path = self.directory / "attempts" / LEARNER / f"{self.quiz['quiz_id']}.json"
-        path.write_text(json.dumps({**result, "score": "100"}))
-        with self.assertRaises(RuntimeError):
-            self.store.attempt(self.quiz["quiz_id"], LEARNER)
-
-    def test_history_lists_attempts_newest_first(self):
-        second = self.store.issue("doc2", questions())
-        with mock.patch("noteworthy_app.attempts.datetime") as clock:
-            clock.now.return_value = datetime(2026, 11, 2, 9, 30, tzinfo=timezone.utc)
-            self.store.submit(second["quiz_id"], LEARNER, [None, None, None, "Photosynthesis"])
-            clock.now.return_value = datetime(2026, 11, 1, 9, 30, tzinfo=timezone.utc)
-            self.submit()
-        self.assertEqual(
-            self.store.history(LEARNER),
-            [
-                {
-                    "quiz_id": second["quiz_id"],
-                    "document_id": "doc2",
-                    "correct": 1,
-                    "total": 4,
-                    "score": 25.0,
-                    "created_at": "2026-11-02T09:30:00+00:00",
-                },
-                {
-                    "quiz_id": self.quiz["quiz_id"],
-                    "document_id": "doc1",
-                    "correct": 2,
-                    "total": 4,
-                    "score": 50.0,
-                    "created_at": "2026-11-01T09:30:00+00:00",
-                },
-            ],
-        )
-        self.assertEqual(self.store.history(OTHER), [])
-
-    def test_history_skips_unreadable_attempts(self):
-        result = self.submit()
-        folder = self.directory / "attempts" / LEARNER
-        for name, content in [
-            ("c" * 32, "{"),
-            ("d" * 32, json.dumps({"correct": "bad"})),
-            ("e" * 32, json.dumps({**result, "quiz_id": "e" * 32, "score": None})),
-        ]:
-            (folder / f"{name}.json").write_text(content)
-        with self.assertLogs("noteworthy_app.attempts", level="WARNING") as logs:
-            history = self.store.history(LEARNER)
-        self.assertEqual(len(logs.output), 3)
-        self.assertEqual([item["quiz_id"] for item in history], [self.quiz["quiz_id"]])
-
     def test_deeply_nested_saved_files_are_unreadable_records(self):
         # json.loads can raise RecursionError here, which is not a ValueError.
         self.submit()
@@ -198,20 +330,64 @@ class AttemptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "^Saved quiz could not be read"):
             self.store.submit("c" * 32, OTHER, [None] * 4)
 
-    def test_untrusted_identifiers_cannot_select_storage_paths(self):
-        for identifier in ["../outside", "", "A" * 32, None, "a" * 33]:
-            with self.subTest(identifier=identifier):
-                with self.assertRaises(ValueError):
-                    self.store.submit(identifier, LEARNER, [None] * 4)
-                with self.assertRaises(ValueError):
-                    self.store.progress(identifier)
-                with self.assertRaises(ValueError):
-                    self.store.quiz(identifier)
-                with self.assertRaises(ValueError):
-                    self.store.attempt(identifier, LEARNER)
-                with self.assertRaises(ValueError):
-                    self.store.attempt(self.quiz["quiz_id"], identifier)
-                with self.assertRaises(ValueError):
-                    self.store.history(identifier)
-        with self.assertRaises(LookupError):
-            self.store.submit("f" * 32, LEARNER, [None] * 4)
+
+@needs_postgres
+class PostgresAttemptTests(AttemptStoreContract, PostgresTestCase):
+    CLOCK = "noteworthy_app.database.datetime"
+    LOGGER = "noteworthy_app.database"
+
+    def make_store(self):
+        return PostgresAttemptStore(self.database)
+
+    def save_raw_attempt(self, learner_id, quiz_id, record):
+        self.execute(
+            "INSERT INTO attempts (learner_id, quiz_id, document_id, created_at, result)"
+            " VALUES (%s, %s, 'doc1', now(), %s::json) ON CONFLICT (learner_id, quiz_id)"
+            " DO UPDATE SET result = EXCLUDED.result",
+            (learner_id, quiz_id, json.dumps(record)),
+        )
+
+    def save_raw_quiz(self, quiz_id, saved):
+        self.execute(
+            "INSERT INTO quizzes (quiz_id, document_id, questions) VALUES (%s, 'doc1', %s::json)",
+            (quiz_id, json.dumps(saved)),
+        )
+
+    def test_submits_from_separate_app_processes_save_one_attempt(self):
+        # Each store has its own Database, as separate app processes would.
+        stores = [PostgresAttemptStore(Database(self.database_url)) for _ in range(3)]
+        answers = [["B", "True", None, None], [None] * 4]
+        barrier = threading.Barrier(6)
+
+        def submit(index):
+            barrier.wait(timeout=30)
+            store = stores[index % len(stores)]
+            return store.submit(self.quiz["quiz_id"], LEARNER, answers[index % 2])
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(submit, range(6)))
+        self.assertTrue(all(item == results[0] for item in results))
+        self.assertEqual(self.execute("SELECT count(*) FROM attempts"), [(1,)])
+
+    def test_text_postgres_cannot_hold_is_kept_as_json(self):
+        quiz = self.store.issue("doc1", [*questions()[:3], {**questions()[3], "answer": "a\x00b"}])
+        answers = [None, None, "\ud800 lone half", "a\x00b"]
+        result = self.store.submit(quiz["quiz_id"], LEARNER, answers)
+        self.assertEqual([item["answer"] for item in result["results"]], answers)
+        self.assertEqual(self.store.attempt(quiz["quiz_id"], LEARNER), result)
+        self.assertEqual(self.store.quiz(quiz["quiz_id"]), quiz)
+        # Such a document ID matches no attempt.
+        self.assertEqual(self.store.progress(LEARNER, "doc\x001"), {"topic_scores": {}})
+
+    def test_database_errors_are_server_errors(self):
+        self.execute("DROP TABLE attempts")
+        self.addCleanup(Database, self.database_url)
+        with (
+            self.assertLogs("noteworthy_app.database", level="ERROR"),
+            self.assertRaisesRegex(RuntimeError, "^The database is not available"),
+        ):
+            self.store.history(LEARNER)
+
+
+if __name__ == "__main__":
+    unittest.main()

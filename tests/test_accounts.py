@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -24,9 +25,11 @@ from noteworthy_app.accounts import (
     verify_password,
 )
 from noteworthy_app.core import extract_passages
+from noteworthy_app.database import Database, PostgresAccountStore
 from noteworthy_app.server import create_server
 from noteworthy_app.storage import save_document
 from tests.fixtures import study_pdf
+from tests.postgres import PostgresTestCase, needs_postgres
 
 CLASS_CODE = "cse4316-class-code"
 PASSWORD = "correct horse battery"
@@ -200,12 +203,18 @@ class HelperTests(unittest.TestCase):
         self.assertFalse(unused.exists())
 
 
-class FileAccountStoreTests(unittest.TestCase):
+class AccountStoreContract:
+    """Checks every account store must pass; each subclass says how to make one."""
+
+    def make_store(self):
+        """Return a new store on the same saved data."""
+        raise NotImplementedError
+
     def setUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name) / "accounts"
-        self.store = FileAccountStore(self.root)
+        super().setUp()
+        # Faster hashes; PasswordTests use the real setting.
+        self.enterContext(mock.patch("noteworthy_app.accounts.SCRYPT_N", 2**10))
+        self.store = self.make_store()
 
     @staticmethod
     def account(**changes):
@@ -219,13 +228,104 @@ class FileAccountStoreTests(unittest.TestCase):
 
     def test_accounts_persist_and_each_email_is_used_once(self):
         self.store.add_account(self.account())
-        found = FileAccountStore(self.root).find_account("student@uta.edu")
+        found = self.make_store().find_account("student@uta.edu")
         self.assertEqual(found, self.account())
         self.assertIsNone(self.store.find_account("other@uta.edu"))
         with self.assertRaises(AccountError) as caught:
-            FileAccountStore(self.root).add_account(self.account(id="b" * 32))
+            self.make_store().add_account(self.account(id="b" * 32))
         self.assertEqual(caught.exception.status, 409)
         self.assertEqual(self.store.find_account("student@uta.edu")["id"], "a" * 32)
+        self.store.add_account(self.account(id="b" * 32, email="other@uta.edu"))
+        self.assertEqual(self.store.find_account("other@uta.edu")["id"], "b" * 32)
+
+    def test_concurrent_adds_of_one_email_keep_one_account(self):
+        barrier = threading.Barrier(6)
+        results = []
+
+        def add(index):
+            barrier.wait(timeout=30)
+            try:
+                self.store.add_account(self.account(id=f"{index:x}" * 32))
+                results.append(index)
+            except AccountError as exc:
+                results.append(exc.status)
+
+        threads = [threading.Thread(target=add, args=(index,)) for index in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        winner, *refused = sorted(results)
+        self.assertEqual(refused, [409] * 5)
+        self.assertEqual(self.store.find_account("student@uta.edu")["id"], f"{winner:x}" * 32)
+
+    def test_sessions_are_added_found_and_deleted(self):
+        self.store.add_account(self.account())
+        key = token_hash("token")
+        session = {"account_id": "a" * 32, "email": "student@uta.edu", "expires_at": 1_900_000_000}
+        self.store.add_session(key, session)
+        self.assertEqual(self.make_store().find_session(key), session)
+        self.assertIsNone(self.store.find_session(token_hash("other")))
+        self.store.delete_session(key)
+        self.assertIsNone(self.store.find_session(key))
+        self.store.delete_session(key)
+        for key in ["../" + "a" * 61, "A" * 64, "a" * 63, None]:
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    self.store.find_session(key)
+                with self.assertRaises(ValueError):
+                    self.store.add_session(key, session)
+                with self.assertRaises(ValueError):
+                    self.store.delete_session(key)
+
+    def test_sign_up_log_in_and_log_out(self):
+        accounts = Accounts(self.store, CLASS_CODE, 3600, False)
+        user, token = accounts.sign_up(" Student@UTA.edu ", PASSWORD, CLASS_CODE)
+        self.assertEqual(user, {"email": "student@uta.edu"})
+        account = self.store.find_account("student@uta.edu")
+        self.assertTrue(verify_password(PASSWORD, account["password_hash"]))
+        self.assertEqual(accounts.current(token), {"id": account["id"], "email": "student@uta.edu"})
+        with self.assertRaises(AccountError) as caught:
+            accounts.sign_up("STUDENT@uta.edu", PASSWORD, CLASS_CODE)
+        self.assertEqual(caught.exception.status, 409)
+        with self.assertRaises(AccountError) as caught:
+            accounts.log_in("student@uta.edu", "wrong password")
+        self.assertEqual(caught.exception.status, 401)
+        _, other = accounts.log_in("student@uta.edu", PASSWORD)
+        accounts.log_out(token)
+        self.assertIsNone(accounts.current(token))
+        self.assertIsNone(self.store.find_session(token_hash(token)))
+        accounts.log_out(token)
+        # Each login has its own session.
+        self.assertEqual(accounts.current(other)["id"], account["id"])
+
+    def test_expired_session_is_removed(self):
+        accounts = Accounts(self.store, CLASS_CODE, 3600, False)
+        with mock.patch("noteworthy_app.accounts.time") as clock:
+            clock.time.return_value = 1_800_000_000
+            _, token = accounts.sign_up("student@uta.edu", PASSWORD, CLASS_CODE)
+            key = token_hash(token)
+            self.assertEqual(self.store.find_session(key)["expires_at"], 1_800_003_600)
+            # Using the session does not move its expiry.
+            clock.time.return_value = 1_800_003_599
+            self.assertIsNotNone(accounts.current(token))
+            clock.time.return_value = 1_800_003_600
+            self.assertIsNone(accounts.current(token))
+        self.assertIsNone(self.store.find_session(key))
+
+
+class FileAccountStoreTests(AccountStoreContract, unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name) / "accounts"
+        super().setUp()
+
+    def make_store(self):
+        return FileAccountStore(self.root)
+
+    def test_email_is_hashed_into_the_file_name(self):
+        self.store.add_account(self.account())
         # The email is hashed into the file name, so user input never becomes a path.
         name = hashlib.sha256(b"student@uta.edu").hexdigest()
         self.assertEqual([path.name for path in (self.root / "users").iterdir()], [f"{name}.json"])
@@ -248,19 +348,6 @@ class FileAccountStoreTests(unittest.TestCase):
             ):
                 self.store.find_account("student@uta.edu")
 
-    def test_sessions_are_added_found_and_deleted(self):
-        key = token_hash("token")
-        session = {"account_id": "a" * 32, "email": "student@uta.edu", "expires_at": 1_900_000_000}
-        self.store.add_session(key, session)
-        self.assertEqual(FileAccountStore(self.root).find_session(key), session)
-        self.assertIsNone(self.store.find_session(token_hash("other")))
-        self.store.delete_session(key)
-        self.assertIsNone(self.store.find_session(key))
-        self.store.delete_session(key)
-        for key in ["../" + "a" * 61, "A" * 64, "a" * 63]:
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                self.store.find_session(key)
-
     def test_unreadable_session_is_ignored(self):
         key = token_hash("token")
         session = {"account_id": "a" * 32, "email": "student@uta.edu", "expires_at": 1_900_000_000}
@@ -279,6 +366,51 @@ class FileAccountStoreTests(unittest.TestCase):
                 self.assertLogs("noteworthy_app.accounts", level="WARNING"),
             ):
                 self.assertIsNone(self.store.find_session(key))
+
+
+@needs_postgres
+class PostgresAccountStoreTests(AccountStoreContract, PostgresTestCase):
+    def make_store(self):
+        return PostgresAccountStore(self.database)
+
+    def test_sign_ups_from_separate_app_processes_keep_one_account(self):
+        # Each store has its own Database, as separate app processes would. The unique
+        # email column keeps one account.
+        stores = [PostgresAccountStore(Database(self.database_url)) for _ in range(3)]
+        barrier = threading.Barrier(6)
+
+        def add(index):
+            barrier.wait(timeout=30)
+            try:
+                stores[index % len(stores)].add_account(self.account(id=f"{index:x}" * 32))
+            except AccountError as exc:
+                return exc.status
+            return 201
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = sorted(pool.map(add, range(6)))
+        self.assertEqual(results, [201] + [409] * 5)
+        self.assertEqual(self.execute("SELECT count(*) FROM accounts"), [(1,)])
+
+    def test_new_session_removes_expired_ones(self):
+        self.store.add_account(self.account())
+        now = int(time.time())
+        expired = {"account_id": "a" * 32, "email": "student@uta.edu", "expires_at": now - 1}
+        self.store.add_session("1" * 64, expired)
+        self.store.add_session("2" * 64, {**expired, "expires_at": now + 3600})
+        self.assertIsNone(self.store.find_session("1" * 64))
+        self.assertEqual(self.store.find_session("2" * 64)["expires_at"], now + 3600)
+        # Deleting an account deletes its sessions.
+        self.execute("DELETE FROM accounts")
+        self.assertIsNone(self.store.find_session("2" * 64))
+
+    def test_email_postgres_cannot_hold_is_refused(self):
+        for email in ["a\x00b@uta.edu", "\ud800@uta.edu"]:
+            with self.subTest(email=ascii(email)):
+                with self.assertRaisesRegex(ValueError, "valid email"):
+                    self.store.add_account(self.account(email=email))
+                self.assertIsNone(self.store.find_account(email))
+        self.assertEqual(self.execute("SELECT count(*) FROM accounts"), [(0,)])
 
 
 class AccountsTests(unittest.TestCase):
@@ -509,6 +641,8 @@ class AccountServerTests(unittest.TestCase):
         )
         os.environ.pop("COOKIE_SECURE", None)
         os.environ.pop("SESSION_DAYS", None)
+        # These tests read the saved files, so never use a database from the shell.
+        os.environ.pop("DATABASE_URL", None)
         # Faster hashes over HTTP; PasswordTests use the real setting.
         self.enterContext(mock.patch("noteworthy_app.accounts.SCRYPT_N", 2**10))
         # The fake model's reply is not JSON, so quizzes use cloze questions.

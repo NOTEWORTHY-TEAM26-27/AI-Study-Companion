@@ -129,7 +129,8 @@ def token_hash(token: str) -> str:
 
 
 class AccountStore(Protocol):
-    """Where accounts and sessions are kept; a PostgreSQL store can replace the files.
+    """Where accounts and sessions are kept: FileAccountStore, or PostgresAccountStore in
+    database.py when DATABASE_URL is set.
 
     Records:
     - account: {"id": 32 lowercase hex characters, "email": normalized (trimmed and
@@ -343,8 +344,11 @@ class Accounts:
         return session_cookie(token, self.session_seconds, self.cookie_secure)
 
 
-def accounts_from_env(directory: Path) -> Accounts | None:
-    """Turn accounts on only when CLASS_CODE is set; otherwise return None."""
+def accounts_from_env(directory: Path, store: AccountStore | None = None) -> Accounts | None:
+    """Turn accounts on only when CLASS_CODE is set; otherwise return None.
+
+    Accounts are kept in store, or as files in directory/accounts without one.
+    """
     class_code = os.environ.get("CLASS_CODE", "").strip()
     if not class_code:
         return None
@@ -356,7 +360,7 @@ def accounts_from_env(directory: Path) -> Accounts | None:
     if not re.fullmatch(r"[0-9]+", days) or int(days) < 1:
         raise ValueError("SESSION_DAYS must be a whole number of days, at least 1.")
     return Accounts(
-        FileAccountStore(directory / "accounts"),
+        store if store is not None else FileAccountStore(directory / "accounts"),
         class_code,
         int(days) * 24 * 60 * 60,
         os.environ.get("COOKIE_SECURE", "").strip() == "1",

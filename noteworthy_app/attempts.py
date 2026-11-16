@@ -20,6 +20,54 @@ def _identifier(value: str) -> str:
     return value
 
 
+def _check_quiz(quiz, quiz_id: str) -> dict:
+    """Return a saved quiz if it has the shape issue() returns; raise RuntimeError otherwise."""
+    if (
+        not isinstance(quiz, dict)
+        or quiz.get("quiz_id") != quiz_id
+        or not isinstance(quiz.get("document_id"), str)
+        or not isinstance(quiz.get("questions"), list)
+        or not all(isinstance(question, dict) for question in quiz["questions"])
+        or not isinstance(quiz.get("owner"), str | None)
+    ):
+        raise RuntimeError("Saved quiz could not be read.")
+    return quiz
+
+
+def _check_attempt(record, learner_id: str, quiz_id: str) -> dict:
+    """Return a saved attempt if it has the shape submit() returns.
+
+    Raise ValueError, TypeError or KeyError otherwise. The PostgreSQL store checks its
+    records the same way.
+    """
+    if (
+        record["learner_id"] != learner_id
+        or record["quiz_id"] != quiz_id
+        or not isinstance(record["document_id"], str)
+        or not isinstance(record["results"], list)
+        or not isinstance(record["created_at"], str)
+        or type(record["correct"]) is not int
+        or type(record["total"]) is not int
+        or not 0 <= record["correct"] <= record["total"]
+        or record["total"] < 1
+        or type(record["score"]) not in {int, float}
+        or not 0 <= record["score"] <= 100
+        or not isinstance(record["topic_scores"], dict)
+    ):
+        raise ValueError("Invalid saved attempt.")
+    for topic, totals in record["topic_scores"].items():
+        if (
+            not isinstance(topic, str)
+            or type(totals["correct"]) is not int
+            or type(totals["total"]) is not int
+            or not 0 <= totals["correct"] <= totals["total"]
+        ):
+            raise ValueError("Invalid topic score.")
+    if sum(t["total"] for t in record["topic_scores"].values()) != record["total"]:
+        raise ValueError("Invalid topic total.")
+    return record
+
+
 class AttemptStore:
     def __init__(self, directory: Path):
         self.directory = directory
@@ -49,15 +97,7 @@ class AttemptStore:
             raise LookupError("Quiz not found. Generate a new quiz.") from exc
         except (ValueError, RecursionError) as exc:
             raise RuntimeError("Saved quiz could not be read.") from exc
-        if (
-            not isinstance(quiz, dict)
-            or quiz.get("quiz_id") != quiz_id
-            or not isinstance(quiz.get("document_id"), str)
-            or not isinstance(quiz.get("questions"), list)
-            or not all(isinstance(question, dict) for question in quiz["questions"])
-            or not isinstance(quiz.get("owner"), str | None)
-        ):
-            raise RuntimeError("Saved quiz could not be read.")
+        _check_quiz(quiz, quiz_id)
         # Owner is an account ID, or None without accounts. Another student's quiz is not found.
         if quiz.get("owner") != owner:
             raise LookupError("Quiz not found. Generate a new quiz.")
@@ -70,32 +110,7 @@ class AttemptStore:
         except RecursionError as exc:
             # Deeply nested JSON is just another unreadable record, not a server error.
             raise ValueError("Invalid saved attempt.") from exc
-        if (
-            record["learner_id"] != learner_id
-            or record["quiz_id"] != path.stem
-            or not isinstance(record["document_id"], str)
-            or not isinstance(record["results"], list)
-            or not isinstance(record["created_at"], str)
-            or type(record["correct"]) is not int
-            or type(record["total"]) is not int
-            or not 0 <= record["correct"] <= record["total"]
-            or record["total"] < 1
-            or type(record["score"]) not in {int, float}
-            or not 0 <= record["score"] <= 100
-            or not isinstance(record["topic_scores"], dict)
-        ):
-            raise ValueError("Invalid saved attempt.")
-        for topic, totals in record["topic_scores"].items():
-            if (
-                not isinstance(topic, str)
-                or type(totals["correct"]) is not int
-                or type(totals["total"]) is not int
-                or not 0 <= totals["correct"] <= totals["total"]
-            ):
-                raise ValueError("Invalid topic score.")
-        if sum(t["total"] for t in record["topic_scores"].values()) != record["total"]:
-            raise ValueError("Invalid topic total.")
-        return record
+        return _check_attempt(record, learner_id, path.stem)
 
     def submit(
         self, quiz_id: str, learner_id: str, answers: list, owner: str | None = None
