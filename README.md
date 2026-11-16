@@ -63,8 +63,10 @@ Progress uses an anonymous browser ID stored in localStorage, alongside document
 IDs and the last selected PDF ID. Scores themselves are stored on the server.
 Progress is separate for each browser, not an authenticated account; clearing browser storage loses
 that browser's progress identifier. Existing browser-only scores are not
-imported, since the server cannot verify them. Accounts and a database remain
-later work. This store supports the current single server process.
+imported, since the server cannot verify them. With student accounts on (see
+Student accounts), the session replaces the learner ID, so progress follows the
+account instead of the browser. A database remains later work. This store
+supports the current single server process.
 
 For frontend and generator integration:
 
@@ -113,6 +115,110 @@ punctuation (`. , : ; ?`).
 Signs, leading decimal points, internal punctuation, primes and factorial `!` stay
 significant: `-1` differs from `1`, `.5` differs from `5`, and `5!` differs from `5`.
 This does not award semantic or partial credit or make model calls.
+
+## Student accounts (SCRUM-144, SCRUM-145)
+
+Accounts are off unless `CLASS_CODE` is set. Without it, the app works as described
+above, with the anonymous learner ID. With it, students sign up with the class code,
+log in, and see only their own documents, quizzes, attempts and scores. The class
+code keeps people outside the class from using model credit. This is the API only;
+the login and sign-up screens come with SCRUM-146. Until they are merged, leave
+`CLASS_CODE` unset on staging: the current page has no login, so with accounts on
+every API call returns 401.
+
+Settings, read when the app starts (Compose passes them through from `.env`):
+
+- `CLASS_CODE`: turns accounts on when set and not empty. Spaces around it, and around
+  the code a student types, are ignored. Keep it commented out in `.env`: the tests
+  expect accounts off, so a shell that exports it makes the existing server tests fail.
+- `COOKIE_SECURE=1`: adds `Secure` to the login cookie, so browsers send it only over
+  HTTPS. Set it on staging.
+- `SESSION_DAYS`: how long a login lasts, in whole days (default 7). Any other value
+  stops startup.
+
+Routes (accounts on). Request bodies are JSON, and a POST without
+`Content-Type: application/json` returns 415.
+
+- `POST /api/signup` with `{"email":"...","password":"...","class_code":"..."}` returns
+  201 `{"email":"..."}` and sets the login cookie, so the student is logged in. The
+  email is trimmed and lowercased. It returns 400 for a missing or non-text field, an
+  invalid email, or a password shorter than 8 or longer than 1024 characters; 403 for
+  a wrong class code (checked first); 409 if the email already has an account; and 413
+  for a body over 16 KiB.
+- `POST /api/login` with `{"email":"...","password":"..."}` returns 200
+  `{"email":"..."}` and sets the cookie. An unknown email and a wrong password both
+  return 401 `{"error":"Email or password is not correct."}`.
+- `POST /api/logout` needs no body. It deletes the session and returns 200
+  `{"status":"logged out"}` with a cookie that clears the browser's copy. It also works
+  without a session, so calling it twice is fine.
+- `GET /api/me` returns 200 `{"email":"..."}` for the logged-in student.
+
+Every other `/api/` route needs the login cookie and returns 401
+`{"error":"Log in to continue."}` without it; `X-Learner-Id` alone is not enough. With
+a session, the routes return the same shapes as above. The account replaces the
+learner ID: `X-Learner-Id` and a submitted `learner_id` are ignored, and the
+`learner_id` in a submit response is the account ID. Another student's document,
+quiz or attempt returns 404, the same as one that does not exist, and asking about
+another student's document never calls the model. The browser sends the cookie with
+each same-site request on its own; pages cannot read it. `GET /`, the static pages and
+`/health` need no login, so a login page can load.
+
+Security choices (for the SCRUM-147 review):
+
+- Passwords are hashed with scrypt (N=16384, r=8, p=1, a random 16-byte salt for each
+  account, a 32-byte key). The parameters are saved with each hash
+  (`scrypt$16384$8$1$<salt>$<key>`), so they can be raised later without breaking
+  older hashes. One hash takes about 50 ms and 16 MiB, which suits the 2 GB Droplet.
+- Passwords and the class code are compared with `hmac.compare_digest`, as bytes.
+- Login gives one message for an unknown email and a wrong password, and an unknown
+  email is still checked against a stand-in hash, so the reply time does not show
+  which emails have accounts. Sign-up checks the class code before the email, so
+  without the code it shows nothing about which emails exist.
+- A session is a 256-bit random token from `secrets`. The server stores only its
+  SHA-256, so a copy of the session files cannot be used to log in.
+- The cookie `noteworthy_session` is `HttpOnly`, `SameSite=Lax` and `Path=/`, plus
+  `Secure` with `COOKIE_SECURE=1`. It lasts `SESSION_DAYS` (7 by default) from login,
+  and using it does not extend it. Logout deletes the session on the server.
+- POSTs must be JSON. A page on another site cannot send JSON here without a CORS
+  preflight, which this server refuses (it answers `OPTIONS` with 501), so it cannot
+  make a logged-in student's browser upload, ask, submit, or log in or out. This is
+  the main guard, because `SameSite` may count other `*.sslip.io` hosts as the same
+  site.
+
+Storage:
+
+- Accounts are `DOCUMENTS_DIR/accounts/users/<SHA-256 of the email>.json` (account ID,
+  email, password hash and creation time), so an email never becomes a file path.
+  Sessions are `DOCUMENTS_DIR/accounts/sessions/<SHA-256 of the token>.json`. Writes
+  are atomic, and a lock keeps each email to one account.
+- Uploaded documents and issued quizzes save the account ID as `owner`, and attempts
+  are saved under `attempts/<account ID>/`. With accounts on, a document's ID comes
+  from the account ID and the PDF, so two students with the same PDF get separate IDs
+  and files, and a student's re-upload keeps its ID.
+- Documents and quizzes from before accounts have no owner. Students do not see them;
+  they are listed only while accounts are off. To give one to a student, add
+  `"owner": "<account ID>"` to its `.json` file and restart the app. Records with an
+  owner are hidden while accounts are off.
+- Accounts and sessions sit behind a small store interface (`AccountStore` in
+  `noteworthy_app/accounts.py`), so the PostgreSQL work (SCRUM-225) can replace the
+  files. Documents, quizzes and attempts are not behind it yet.
+
+Limits:
+
+- No rate limit on login or sign-up yet. scrypt slows guessing to about 50 ms a try,
+  and sign-up needs the class code, but repeated guesses at one email are not blocked.
+- No password reset, email check, or way to delete an account.
+- One app process: a lock in that process keeps emails unique. More than one process
+  needs the PostgreSQL store with a unique email column.
+- Expired sessions are deleted when they are next used or at logout; unused ones stay
+  as small files. Staging backups of `/data/documents` now include password hashes
+  and token hashes, but no plain passwords or tokens.
+- Turning accounts off after students used them hides their documents and quizzes.
+  Their attempts stay under `attempts/<account ID>/`, readable with `X-Learner-Id` by
+  anyone who knows that account ID (only that student has seen it, in submit and
+  attempt responses).
+- A PDF uploaded by several students is embedded and kept in memory once per student,
+  because embedding search keeps vectors by document ID.
 
 ## Question generation (SCRUM-84)
 
@@ -226,7 +332,10 @@ relative to the directory where you start the app. Each successful upload saves
 the original `<document-id>.pdf` and a `<document-id>.json` file containing its
 display name and extracted passages. The ID is derived from the PDF content;
 the uploaded filename is never used as a disk path. Uploading the same PDF again
-keeps the same ID and updates its display name.
+keeps the same ID and updates its display name. With student accounts on, the ID
+also depends on the student's account, so each student has their own copy, and
+account and session files are kept in `accounts/` in the same directory (see
+Student accounts).
 
 On startup the app restores saved passages into memory, so the document list,
 answer, and quiz APIs work after restarting without another upload or text
@@ -359,6 +468,7 @@ outside the source checkout. Runtime dependencies are pinned in
 | `noteworthy_app/question_generator.py` | Model questions in four formats, checked against the PDF, with cloze fallback |
 | `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions (fallback) |
 | `noteworthy_app/grading.py` | Server-side grading for the current and shared four-format question schemas |
+| `noteworthy_app/accounts.py` | Student accounts: class-code sign-up, scrypt password hashes, login sessions, and the account store |
 | `noteworthy_app/attempts.py` | Persist and reload issued quizzes and attempts; list attempts; summarize saved topic scores |
 | `noteworthy_app/models.py` | Ollama and DigitalOcean adapter exposing `generate_answer(prompt) -> str` |
 | `noteworthy_app/server.py` | HTTP routes, validation, and in-memory document lookup |
@@ -374,39 +484,49 @@ model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
 `DIGITALOCEAN_API_KEY`, optional `DIGITALOCEAN_BASE_URL`, `DIGITALOCEAN_MODEL`,
 `DIGITALOCEAN_MAX_TOKENS`, `DIGITALOCEAN_TEMPERATURE` and `DIGITALOCEAN_REASONING_EFFORT`).
 
+With student accounts on, every `/api/` route needs the login cookie (see Student
+accounts).
+
 | Route | Behavior |
 |---|---|
 | `GET /` | Serve the study interface |
 | `GET /<name>.html`, `.css`, `.js`, `.svg` | Serve that file from `noteworthy_app/static/`; names use lower-case letters, digits and hyphens only, up to 64 before the extension, and any other path returns 404 |
 | `GET /health` | Return `{"status":"ok"}` without calling external services |
+| `POST /api/signup` | Accounts on only: accept `email`, `password` and `class_code`; create the account, log in, and return `email` (201) |
+| `POST /api/login` | Accounts on only: accept `email` and `password`; log in and return `email` |
+| `POST /api/logout` | Accounts on only: delete the session and clear the cookie |
+| `GET /api/me` | Accounts on only: return the logged-in student's `email` |
 | `GET /api/documents` | List current and restored documents (ID, name, passage count, status, and `uploaded_at`, the time the PDF was last saved as ISO 8601 UTC, or `null` if the PDF is missing) from the configured storage directory |
 | `POST /api/upload` | Accept `name` and base64 PDF `data`; return document ID, name, passage count, status, and `uploaded_at` |
 | `POST /api/ask` | Accept `document_id` and `question`; return answer and source passages |
 | `POST /api/quiz` | Accept `document_id`; return `quiz_id` and up to eight public questions (type, prompt, options or choices, source IDs/pages), without answer keys or excerpts |
-| `POST /api/quiz/submit` | Accept `quiz_id`, `learner_id`, and `answers`; grade and persist one attempt, then return scores and source-linked feedback |
-| `GET /api/progress` | Accept the `X-Learner-Id` header and an optional `document_id` query parameter; return only aggregated `topic_scores` |
+| `POST /api/quiz/submit` | Accept `quiz_id`, `learner_id` (the session when accounts are on), and `answers`; grade and persist one attempt, then return scores and source-linked feedback |
+| `GET /api/progress` | Accept the `X-Learner-Id` header (the session when accounts are on) and an optional `document_id` query parameter; return only aggregated `topic_scores` |
 | `GET /api/quiz/<quiz_id>` | Return an issued quiz again (`quiz_id`, `document_id`, public questions), without answer keys or excerpts |
-| `GET /api/attempts` | Accept the `X-Learner-Id` header; list that browser's attempts, newest first, with quiz and document IDs, document name, score, and date |
-| `GET /api/attempts/<quiz_id>` | Accept the `X-Learner-Id` header; return one saved attempt, the same as the submit response |
+| `GET /api/attempts` | Accept the `X-Learner-Id` header (the session when accounts are on); list that learner's attempts, newest first, with quiz and document IDs, document name, score, and date |
+| `GET /api/attempts/<quiz_id>` | Accept the `X-Learner-Id` header (the session when accounts are on); return one saved attempt, the same as the submit response |
 
 The PDF limit is 12 MiB. Invalid JSON and fields return 400, missing routes,
 documents, quizzes or attempts return 404, oversized uploads return 413, storage
 failures return 500, and model failures or unreadable saved quizzes and attempts
-return 503.
+return 503. With student accounts on, a missing or expired session returns 401, a
+wrong class code 403, an email that already has an account 409, and a POST without
+a JSON content type 415; another student's documents, quizzes and attempts return
+404.
 
 ## Prototype limits
 
-This is a development baseline. Documents are shared within one server instance
-and persist in its configured storage directory, along with quiz attempts and
-scores. Browser local storage contains identifiers and selection metadata.
+This is a development baseline. Without student accounts, documents are shared
+within one server instance and persist in its configured storage directory, along
+with quiz attempts and scores. Browser local storage contains identifiers and selection metadata.
 When the page opens it lists that browser's uploaded documents (Ready), restores
 the selected PDF, and loads its server-side scores. An upload in progress shows
 Processing, and a failed upload shows Failed
 with the reason until the page is reloaded. The page checks the file type and
-the 12 MB limit before uploading. The API itself is not limited to one student
-until accounts are added (SCRUM-116, PBI 20).
-There is no login, per-student isolation, database, OCR, or OneDrive/Canvas
-import yet. The app has embedding search and four-format model questions, with
+the 12 MB limit before uploading. Without `CLASS_CODE` the API is shared by
+everyone who can reach it; with it, each student logs in and sees only their own
+data (see Student accounts). The login screens, a database, OCR, and
+OneDrive/Canvas import are not built yet. The app has embedding search and four-format model questions, with
 the cloze quiz as fallback; the knowledge graph research is not in the app yet.
 
 Sprint 2 work under SCRUM-11:

@@ -90,6 +90,8 @@ Uploaded documents live in the `documents` Docker volume and survive redeploys.
 
 There is no database yet. Uploaded PDFs, issued quizzes, and saved quiz attempts are files in the
 `documents` volume, at `/data/documents` in the app container. Nothing backs them up automatically.
+With student accounts on (`CLASS_CODE`), accounts and login sessions are there too, in `accounts/`:
+password hashes and hashed session tokens, never plain passwords or tokens. Keep backups private.
 
 Take a backup as `deploy` while the app is running:
 
@@ -134,7 +136,8 @@ To restore a backup:
    docker compose -f compose.yaml -f compose.staging.yaml restart app
    ```
 5. Open `https://<STAGING_HOST>/api/documents` and check that it lists the restored documents. The web
-   page itself lists only documents uploaded from that browser.
+   page itself lists only documents uploaded from that browser. With student accounts on, log in first;
+   the list then shows only that student's documents.
 
 A restore adds the files in the backup and replaces files with the same name. Files saved after the
 backup stay.
