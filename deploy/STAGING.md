@@ -1,6 +1,7 @@
 # Staging server setup (SCRUM-61)
 
-One DigitalOcean Droplet runs the app behind Caddy, which provides HTTPS.
+One DigitalOcean Droplet runs the app and its PostgreSQL database behind Caddy, which
+provides HTTPS.
 The URL uses sslip.io because the course cannot buy a domain name.
 
 ## One-time setup
@@ -45,8 +46,9 @@ The URL uses sslip.io because the course cannot buy a domain name.
    ```
 
    Set `STAGING_HOST` to the Reserved IP with dashes plus `.sslip.io`, for example `203-0-113-10.sslip.io`.
-   Paste the DigitalOcean model access key after `DIGITALOCEAN_API_KEY=`. After changing `.env`, run the
-   deploy script so the app picks it up.
+   Paste the DigitalOcean model access key after `DIGITALOCEAN_API_KEY=`. Leave `POSTGRES_PASSWORD` out:
+   the deploy script adds it (see Database). After changing `.env`, run the deploy script so the app
+   picks it up.
 
 ## Deploy
 
@@ -55,7 +57,8 @@ cd ~/noteworthy
 ./scripts/deploy_staging.sh
 ```
 
-The script pulls `main`, rebuilds, restarts, and waits until `https://<STAGING_HOST>/health` answers.
+The script pulls `main`, adds the database password to `.env` if it is not there yet, installs the
+nightly database backup, rebuilds, restarts, and waits until `https://<STAGING_HOST>/health` answers.
 The first run takes a minute longer while Caddy gets the certificate.
 
 ## Deploy on merge (SCRUM-79)
@@ -81,17 +84,21 @@ To stop automatic deploys, delete the `STAGING_SSH_KEY` secret or remove that li
 ```bash
 docker compose -f compose.yaml -f compose.staging.yaml ps
 docker compose -f compose.yaml -f compose.staging.yaml logs --tail=100 app
+docker compose -f compose.yaml -f compose.staging.yaml logs --tail=100 db
+docker compose -f compose.yaml -f compose.staging.yaml exec db psql -U noteworthy -d noteworthy
 docker compose -f compose.yaml -f compose.staging.yaml down
 ```
 
-Uploaded documents live in the `documents` Docker volume and survive redeploys.
+Uploaded documents live in the `documents` Docker volume, and accounts, quizzes and attempts in the
+`database` volume. Both survive redeploys and `down`; `down --volumes` deletes them.
 
 ## Backups (SCRUM-105)
 
-There is no database yet. Uploaded PDFs, issued quizzes, and saved quiz attempts are files in the
-`documents` volume, at `/data/documents` in the app container. Nothing backs them up automatically.
-With student accounts on (`CLASS_CODE`), accounts and login sessions are there too, in `accounts/`:
-password hashes and hashed session tokens, never plain passwords or tokens. Keep backups private.
+Uploaded PDFs and their extracted passages are files in the `documents` volume, at `/data/documents`
+in the app container. Nothing backs them up automatically; this section covers them. Accounts,
+quizzes and attempts are in the database, which is backed up every night (see Database backups).
+Quizzes and attempts saved as files before the database are in the `documents` volume too. Keep
+backups private.
 
 Take a backup as `deploy` while the app is running:
 
@@ -141,15 +148,110 @@ To restore a backup:
    (none from before accounts), so it is not a full check. List the files instead:
 
    ```bash
-   docker compose -f compose.yaml -f compose.staging.yaml exec app \
-     ls /data/documents /data/documents/accounts/users
+   docker compose -f compose.yaml -f compose.staging.yaml exec app ls /data/documents
    ```
 
-   Each document is a `.pdf` and a `.json` with the same ID, and each account is one `.json` in
-   `accounts/users`.
+   Each document is a `.pdf` and a `.json` with the same ID. Accounts are in the database (see
+   Restore the database).
 
 A restore adds the files in the backup and replaces files with the same name. Files saved after the
 backup stay.
+
+## Database (SCRUM-225)
+
+Accounts, login sessions, issued quizzes and quiz attempts are in PostgreSQL 16, which runs
+as the `db` container with its data in the `database` Docker volume. The volume survives
+redeploys, so accounts and attempts do too. Uploaded PDFs stay as files in the `documents`
+volume (see Backups). The database publishes no port; only the app and
+`docker compose exec` can reach it.
+
+The container is limited to 256 MB, with small PostgreSQL memory settings and at most 20
+connections (`compose.staging.yaml`). The app opens at most 10 at once.
+
+### Password
+
+`scripts/deploy_staging.sh` adds a random `POSTGRES_PASSWORD` to `.env` on the first deploy,
+makes `.env` readable only by `deploy`, and never prints the password. PostgreSQL takes the
+password only when the `database` volume is created, so:
+
+- Never change or delete the `POSTGRES_PASSWORD` line in `.env`. If it is missing while the
+  volume exists, the deploy script stops instead of making a new one.
+- To change the password, or to set one again after the line was lost, set it inside the
+  database first (the container's own `psql` needs no password), then put the same value in
+  `.env` and run the deploy script. Use only letters, digits and hyphens, since the app puts it
+  in a URL:
+
+  ```bash
+  cd ~/noteworthy
+  docker compose -f compose.yaml -f compose.staging.yaml exec db psql -U noteworthy -d noteworthy -c '\password noteworthy'
+  nano .env
+  ./scripts/deploy_staging.sh
+  ```
+
+### First deploy with the database
+
+The first automatic deploy after this change still runs the old deploy script, which does not
+add the password, so it stops with `Set POSTGRES_PASSWORD in .env`. Staging keeps running the
+old version. Run `./scripts/deploy_staging.sh` by hand once (or run the Deploy to staging
+workflow again); the new script adds the password and starts the database.
+
+Quiz attempts saved as files before this change were test data and are not moved into the
+database. They stay in the `documents` volume, unused, so the score history starts empty.
+
+### Database backups
+
+The deploy script installs a cron job for `deploy` that runs `scripts/backup_db.sh` every
+night at 08:30 UTC. Running the deploy script again replaces the line, so there is only one.
+Check it with `crontab -l`. Each run adds a line to `~/backups/backup_db.log`.
+
+The script saves `~/backups/noteworthy-db-<UTC time>.sql.gz` (a `pg_dump`, run inside the
+`db` container), checks that it is complete, and deletes all but the newest 7. It stops with
+an error, and leaves no partial file, if the database is not running or the dump fails. Run it
+by hand before a big change:
+
+```bash
+cd ~/noteworthy
+./scripts/backup_db.sh
+```
+
+The dumps hold password hashes, hashed session tokens and student scores, never plain
+passwords or tokens. They are readable only by `deploy`. Copy them off the server now and then:
+
+```bash
+scp deploy@<STAGING_HOST>:backups/noteworthy-db-<UTC time>.sql.gz .
+```
+
+### Restore the database
+
+A restore replaces the four tables with the backup's contents, so anything saved after the
+backup is lost.
+
+1. Run `./scripts/backup_db.sh` so the current data is not lost.
+2. If the backup you need is not on the server, copy it there from your own computer:
+
+   ```bash
+   scp noteworthy-db-<UTC time>.sql.gz deploy@<STAGING_HOST>:backups/
+   ```
+3. Stop the app, load the backup in one transaction (nothing changes if it fails), and start
+   the app again:
+
+   ```bash
+   cd ~/noteworthy
+   docker compose -f compose.yaml -f compose.staging.yaml stop app
+   gunzip -c ~/backups/noteworthy-db-<UTC time>.sql.gz \
+     | docker compose -f compose.yaml -f compose.staging.yaml exec -T db \
+       psql -U noteworthy -d noteworthy -v ON_ERROR_STOP=1 --single-transaction
+   docker compose -f compose.yaml -f compose.staging.yaml start app
+   ```
+4. Check the row counts:
+
+   ```bash
+   docker compose -f compose.yaml -f compose.staging.yaml exec db psql -U noteworthy -d noteworthy \
+     -c 'SELECT (SELECT count(*) FROM accounts) AS accounts, (SELECT count(*) FROM attempts) AS attempts'
+   ```
+
+On a new Droplet, run `./scripts/deploy_staging.sh` first, so the database exists, then
+follow the same steps.
 
 ## Model answers on staging
 
@@ -184,7 +286,9 @@ Do this a few days before 11/30, so there is time to fix problems.
    have true/false, fill-in-the-blank, and short-answer questions; only multiple choice means the model
    call failed (see above). Reload the page
    and check that the PDF is still selected and Scores by topic still shows the result.
-3. Backup: run `./scripts/backup_staging.sh` on the server and copy the file off with `scp`.
+3. Backup: run `./scripts/backup_staging.sh` and `./scripts/backup_db.sh` on the server and copy both
+   files off with `scp`. Check that `crontab -l` lists `backup_db.sh` and that
+   `~/backups/backup_db.log` ends with a recent `Saved` line.
 4. Cost:
    - DigitalOcean Billing page: check this month's usage so far.
    - Model balance: the prepaid Inference and Agents balance must cover the demo. At $0 the model

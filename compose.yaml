@@ -7,16 +7,42 @@ services:
       HOST: 0.0.0.0
       PORT: "8000"
       DOCUMENTS_DIR: /data/documents
+      # Accounts, quizzes and attempts go to the db service. The password may hold only
+      # letters, digits and hyphens, since it is part of this URL.
+      DATABASE_URL: postgresql://noteworthy:${POSTGRES_PASSWORD:-noteworthy-local}@db:5432/noteworthy
       OLLAMA_URL: ${COMPOSE_OLLAMA_URL:-http://host.docker.internal:11434/api/generate}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
       RETRIEVAL: ${RETRIEVAL:-embedding}
       CLASS_CODE: ${CLASS_CODE:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-}
       SESSION_DAYS: ${SESSION_DAYS:-}
+    depends_on:
+      db:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - documents:/data/documents
 
+  # PostgreSQL for accounts, quizzes and attempts. No port is published, so only the app
+  # (and docker compose exec) can reach it.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: noteworthy
+      POSTGRES_DB: noteworthy
+      # The default is for laptops only; staging sets its own (compose.staging.yaml).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-noteworthy-local}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      # Over TCP, so it passes only once the real server is up, not the first-run setup one.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "noteworthy", "-d", "noteworthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
 volumes:
   documents:
+  database:

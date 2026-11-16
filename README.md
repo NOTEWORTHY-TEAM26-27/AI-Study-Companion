@@ -52,10 +52,10 @@ but not used by the app yet.
 
 The page submits answers to the server and restores the last selected PDF and
 its saved topic scores after a reload (falling back to the first available PDF
-uploaded from that browser). Quizzes and attempts are JSON files under
-`DOCUMENTS_DIR/quizzes`
-and `DOCUMENTS_DIR/attempts`; the existing documents Docker volume preserves
-them across restarts and redeploys. One attempt per browser and issued quiz is
+uploaded from that browser). Quizzes and attempts are saved in PostgreSQL when
+`DATABASE_URL` is set (Docker Compose and staging; see Database), and otherwise as
+JSON files under `DOCUMENTS_DIR/quizzes` and `DOCUMENTS_DIR/attempts`. Both survive
+restarts and redeploys. One attempt per browser and issued quiz is
 saved atomically. Retrying a submission returns that same result and does not
 count it twice. Generate another quiz to make a new attempt.
 
@@ -65,8 +65,8 @@ Progress is separate for each browser, not an authenticated account; clearing br
 that browser's progress identifier. Existing browser-only scores are not
 imported, since the server cannot verify them. With student accounts on (see
 Student accounts), the session replaces the learner ID, so progress follows the
-account instead of the browser. A database remains later work. This store
-supports the current single server process.
+account instead of the browser. The file store supports one server process; the
+PostgreSQL store also works with several.
 
 For frontend and generator integration:
 
@@ -81,9 +81,8 @@ For frontend and generator integration:
 - `GET /api/progress?document_id=...` with the header `X-Learner-Id: ...` returns
   only aggregated `topic_scores`; omit `document_id` for all that browser's PDFs.
   The learner ID goes in the header, not the URL, so it stays out of request logs. It does not
-  return attempt bodies or answer keys. It scans the immutable saved attempts
-  without holding the submit lock; a concurrent new attempt may appear on the
-  next read. No new cache or database is required.
+  return attempt bodies or answer keys. It reads the saved attempts without
+  blocking a submit; a concurrent new attempt may appear on the next read.
 - `GET /api/quiz/<quiz_id>` returns an issued quiz again in the same shape as
   `POST /api/quiz` (`quiz_id`, `document_id`, public `questions`), so a page
   reload does not lose the quiz. Answer keys and excerpts stay on the server.
@@ -217,22 +216,29 @@ Security choices (for the SCRUM-147 review):
 
 Storage:
 
-- Accounts are `DOCUMENTS_DIR/accounts/users/<SHA-256 of the email>.json` (account ID,
-  email, password hash and creation time), so an email never becomes a file path.
-  Sessions are `DOCUMENTS_DIR/accounts/sessions/<SHA-256 of the token>.json`. Writes
-  are atomic, and a lock keeps each email to one account.
+- With `DATABASE_URL` set (see Database), accounts and sessions are rows in the
+  `accounts` and `sessions` tables. The email column is unique, so each email has one
+  account even with several app processes. A session row is keyed by the SHA-256 of
+  its token and is deleted with its account.
+- Without it, accounts are `DOCUMENTS_DIR/accounts/users/<SHA-256 of the email>.json`
+  (account ID, email, password hash and creation time), so an email never becomes a
+  file path. Sessions are `DOCUMENTS_DIR/accounts/sessions/<SHA-256 of the token>.json`.
+  Writes are atomic, and a lock keeps each email to one account.
 - Uploaded documents and issued quizzes save the account ID as `owner`, and attempts
-  are saved under `attempts/<account ID>/`. With accounts on, a document's ID comes
-  from the account ID and the PDF, so two students with the same PDF get separate IDs
-  and files, and a student's re-upload keeps its ID.
+  are saved under the account ID (in `attempts/<account ID>/` without a database).
+  With accounts on, a document's ID comes from the account ID and the PDF, so two
+  students with the same PDF get separate IDs and files, and a student's re-upload
+  keeps its ID.
 - Documents and quizzes from before accounts have no owner. Students do not see them;
   they are listed only while accounts are off. To give one to a student, add
-  `"owner": "<account ID>"` to its `.json` file and restart the app. Records with an
-  owner are hidden while accounts are off.
+  `"owner": "<account ID>"` to its `.json` file and restart the app (for a quiz in
+  the database, set its `owner` column). Records with an owner are hidden while
+  accounts are off.
 - Accounts and sessions sit behind a small store interface (`AccountStore` in
-  `noteworthy_app/accounts.py`), so the PostgreSQL work (SCRUM-225) can replace the
-  files. Its docstring lists the record shapes and which errors a store must raise.
-  Documents, quizzes and attempts are not behind it yet.
+  `noteworthy_app/accounts.py`) with a file version and a PostgreSQL version
+  (`noteworthy_app/database.py`). Its docstring lists the record shapes and which
+  errors a store must raise. Quizzes and attempts also have a file store and a
+  PostgreSQL store with the same methods. Documents are still files.
 
 Limits:
 
@@ -242,13 +248,14 @@ Limits:
 - Sign-up has no rate limit. A wrong class code is cheap to check, so the code must be
   long and random (see `CLASS_CODE` above).
 - No password reset, email check, or way to delete an account.
-- One app process: a lock in that process keeps emails unique. More than one process
-  needs the PostgreSQL store with a unique email column.
-- Expired sessions are deleted when they are next used or at logout; unused ones stay
-  as small files. Staging backups of `/data/documents` now include password hashes
-  and token hashes, but no plain passwords or tokens.
+- Without a database, a lock in the app process keeps emails unique, so run one
+  process. With `DATABASE_URL`, the unique email column does this for any number.
+- Expired sessions are deleted when they are next used or at logout. In the database,
+  each new login also deletes all expired sessions; as files, unused ones stay. Database
+  backups and backups of `/data/documents` include password hashes and token hashes,
+  but no plain passwords or tokens.
 - Turning accounts off after students used them hides their documents and quizzes.
-  Their attempts stay under `attempts/<account ID>/`, readable with `X-Learner-Id` by
+  Their attempts stay under their account ID, readable with `X-Learner-Id` by
   anyone who knows that account ID (only that student has seen it, in submit and
   attempt responses).
 - A PDF uploaded by several students is embedded and kept in memory once per student,
@@ -367,9 +374,10 @@ the original `<document-id>.pdf` and a `<document-id>.json` file containing its
 display name and extracted passages. The ID is derived from the PDF content;
 the uploaded filename is never used as a disk path. Uploading the same PDF again
 keeps the same ID and updates its display name. With student accounts on, the ID
-also depends on the student's account, so each student has their own copy, and
-account and session files are kept in `accounts/` in the same directory (see
-Student accounts).
+also depends on the student's account, so each student has their own copy.
+Without a database, account and session files are kept in `accounts/` in the same
+directory (see Student accounts). Documents stay files even when `DATABASE_URL` is
+set (see Database).
 
 On startup the app restores saved passages into memory, so the document list,
 answer, and quiz APIs work after restarting without another upload or text
@@ -384,6 +392,69 @@ This is file storage for one application process. In a container,
 disposable container's temporary filesystem will not survive its replacement.
 Compose sets it to `/data/documents`, backed by the `documents` volume, so on
 the staging Droplet uploads stay in that volume (see `deploy/STAGING.md`).
+
+## Database (SCRUM-225)
+
+When `DATABASE_URL` is set, the app keeps accounts, login sessions, issued quizzes
+and quiz attempts in PostgreSQL. Docker Compose and staging set it. Without it (the
+local app and `make test`), they stay as files in `DOCUMENTS_DIR`, as before.
+Uploaded PDFs and their extracted passages stay as files in `DOCUMENTS_DIR` either
+way, on the `documents` Docker volume; moving them is later work.
+
+| Data | With `DATABASE_URL` | Without it |
+|---|---|---|
+| Accounts and login sessions | `accounts` and `sessions` tables | `DOCUMENTS_DIR/accounts/` |
+| Issued quizzes | `quizzes` table | `DOCUMENTS_DIR/quizzes/` |
+| Quiz attempts | `attempts` table | `DOCUMENTS_DIR/attempts/` |
+| Uploaded PDFs and passages | files in `DOCUMENTS_DIR` | files in `DOCUMENTS_DIR` |
+
+- Compose runs PostgreSQL 16 as the `db` service, keeps its data in the `database`
+  volume, and gives the app
+  `DATABASE_URL=postgresql://noteworthy:<POSTGRES_PASSWORD>@db:5432/noteworthy`. The
+  app starts after the database passes its health check. No database port is
+  published, so only the app and `docker compose exec` can reach it.
+- `POSTGRES_PASSWORD` is the database password. On laptops it defaults to
+  `noteworthy-local` (also in `.env.example`). Staging has no default:
+  `scripts/deploy_staging.sh` adds a random one to the server's `.env` on the first
+  deploy. Use only letters, digits and hyphens, since it is part of the URL.
+  PostgreSQL takes the password only when the `database` volume is created, so
+  changing it in `.env` later does not change the database's password (see
+  `deploy/STAGING.md`).
+- The app creates its tables when it starts (`CREATE TABLE IF NOT EXISTS`); there is
+  no separate migration step yet. If the database cannot be reached at startup, the
+  app stops with an error. Later database errors return 503 and the app keeps running.
+- Each store call opens a short connection, runs one transaction and closes it, with
+  at most 10 open at once in each app process. The primary key on learner and quiz
+  keeps one attempt per learner and quiz, even when two submits arrive together or
+  several app processes run, and the unique email column does the same for accounts.
+  Each new login also deletes expired sessions.
+- Existing files are not moved into the database. The quiz attempts saved as files on
+  staging before this change were test data; they stay in the `documents` volume,
+  unused.
+- psycopg (the PostgreSQL driver) is in `requirements.txt`, but the app imports it only
+  when `DATABASE_URL` is set.
+
+Local use with Docker Compose (see Docker and Compose):
+
+```bash
+docker compose up --build -d --wait
+docker compose exec db psql -U noteworthy -d noteworthy -c '\dt'
+```
+
+`docker compose down` keeps the database; `docker compose down --volumes` deletes it
+along with the uploads.
+
+`make test` needs no database. The PostgreSQL tests run only when `TEST_DATABASE_URL`
+is set and psycopg is installed, and are skipped otherwise. Each test class creates its
+own schema in that database and drops it at the end. CI runs them against a PostgreSQL
+service. To run them on your computer with Docker:
+
+```bash
+docker run -d --name noteworthy-test-db -e POSTGRES_PASSWORD=test \
+  -p 127.0.0.1:55432:5432 postgres:16-alpine
+TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/postgres make test PYTHON=python
+docker rm -f noteworthy-test-db
+```
 
 ## Docker and Compose
 
@@ -403,17 +474,19 @@ extraction and quizzes work without a model service.
 Compose mounts the named `documents` volume at `/data/documents`. Uploaded PDFs
 and extracted passages survive container recreation and `docker compose down`.
 This volume is separate from the local app's `data/documents` directory. Compose
-does not copy existing local uploads into it.
+does not copy existing local uploads into it. Compose also starts PostgreSQL (the
+`db` service, with its data in the `database` volume), and the app waits until it is
+healthy; see Database.
 
 ```bash
 docker compose up -d --force-recreate --wait   # replace the app, keeping documents
 docker compose down                          # stop/remove containers, keeping documents
 ```
 
-`docker compose down --volumes` deletes the stored uploads. Use that option only
-when you intend to reset the data. A Docker volume stays on its Docker host, so
-the staging Droplet has its own `documents` volume, separate from the one on
-your computer.
+`docker compose down --volumes` deletes the stored uploads and the database. Use
+that option only when you intend to reset the data. A Docker volume stays on its
+Docker host, so the staging Droplet has its own `documents` and `database` volumes,
+separate from the ones on your computer.
 
 Compose automatically reads `.env` for variable substitution. `COMPOSE_PORT`
 changes the host port (for example, `COMPOSE_PORT=8080 docker compose up -d`).
@@ -442,7 +515,8 @@ Git history, `.env`, uploads, tests, and development tooling are excluded.
 ## Staging and deploy
 
 Staging runs at <https://143-244-212-41.sslip.io> on one DigitalOcean Droplet,
-using `compose.yaml` plus `compose.staging.yaml` (the app and Caddy for HTTPS).
+using `compose.yaml` plus `compose.staging.yaml` (the app, PostgreSQL, and Caddy
+for HTTPS).
 `GET /health` should return `{"status": "ok"}`.
 
 - **Automatic:** every merge to `main` deploys staging after CI passes
@@ -457,14 +531,18 @@ using `compose.yaml` plus `compose.staging.yaml` (the app and Caddy for HTTPS).
   ```
 
 - **Settings:** the server's `~/noteworthy/.env` (never committed) holds
-  `STAGING_HOST` and the model settings (`AI_PROVIDER=digitalocean` and
-  `DIGITALOCEAN_API_KEY`). Staging uses embedding search unless `.env` sets
+  `STAGING_HOST`, the model settings (`AI_PROVIDER=digitalocean` and
+  `DIGITALOCEAN_API_KEY`), and `POSTGRES_PASSWORD`, which the deploy script adds on
+  the first deploy. Staging uses embedding search unless `.env` sets
   `RETRIEVAL=keyword`. Run the deploy script after changing it.
+- **Database:** accounts, quizzes and attempts are in the `db` container and its
+  `database` volume, so they survive redeploys. The deploy script also installs a
+  nightly backup (`scripts/backup_db.sh`, the newest 7 kept in `~/backups`).
 - **Logs:** `docker compose -f compose.yaml -f compose.staging.yaml logs --tail=100 app`
   on the server.
 
-First-time server setup, the key for automatic deploys, and how to turn
-automatic deploys off are in `deploy/STAGING.md`.
+First-time server setup, the key for automatic deploys, how to turn automatic
+deploys off, and database backups and restores are in `deploy/STAGING.md`.
 
 ## Checks and packaging
 
@@ -488,7 +566,8 @@ Use `make format PYTHON=python` to apply formatting and import fixes. An optiona
 browser-logic regression test runs with Node.js when installed, and is explicitly
 skipped otherwise; Node is not required to run the application. Tests use
 synthetic PDFs and a local test model server; they never call Ollama or a hosted
-model. The wheel includes the HTML, CSS, JavaScript and SVG files in
+model. The PostgreSQL tests are skipped unless `TEST_DATABASE_URL` is set (see
+Database). The wheel includes the HTML, CSS, JavaScript and SVG files in
 `noteworthy_app/static/`, so an installed app can run
 outside the source checkout. Runtime dependencies are pinned in
 `requirements.txt`, and developer tools are pinned in `requirements-dev.txt`.
@@ -503,14 +582,15 @@ outside the source checkout. Runtime dependencies are pinned in
 | `noteworthy_app/quiz.py` | Five source-traceable multiple-choice cloze questions (fallback) |
 | `noteworthy_app/grading.py` | Server-side grading for the current and shared four-format question schemas |
 | `noteworthy_app/accounts.py` | Student accounts: class-code sign-up, scrypt password hashes, login sessions, and the account store |
-| `noteworthy_app/attempts.py` | Persist and reload issued quizzes and attempts; list attempts; summarize saved topic scores |
+| `noteworthy_app/attempts.py` | Persist and reload issued quizzes and attempts as files; list attempts; summarize saved topic scores |
+| `noteworthy_app/database.py` | PostgreSQL versions of the account store and the attempt store, used when `DATABASE_URL` is set |
 | `noteworthy_app/models.py` | Ollama and DigitalOcean adapter exposing `generate_answer(prompt) -> str` |
 | `noteworthy_app/server.py` | HTTP routes, validation, and in-memory document lookup |
 | `noteworthy_app/storage.py` | Save original PDFs and passages; restore documents on startup; report upload time |
 | `noteworthy_app/static/` | Pages, styles, scripts and images served by name; `index.html` is the upload, answer, quiz submission, and restored server-score interface |
-| `tests/` | Offline extraction, quiz, model adapter, and HTTP behavior checks |
+| `tests/` | Offline extraction, quiz, model adapter, HTTP behavior, and store checks (the PostgreSQL ones need `TEST_DATABASE_URL`) |
 | `research/` | Question generation, knowledge graph, and RAG search research scripts (not run by the app) |
-| `deploy/`, `scripts/` | Staging server files, the deploy script, and the deploy key setup |
+| `deploy/`, `scripts/` | Staging server files, the deploy script, backups, and the deploy key setup |
 
 The server accepts an answer generator through `create_server(...)`, so the
 model adapter can be swapped. `noteworthy_app/models.py` picks the provider from
@@ -559,8 +639,8 @@ Processing, and a failed upload shows Failed
 with the reason until the page is reloaded. The page checks the file type and
 the 12 MB limit before uploading. Without `CLASS_CODE` the API is shared by
 everyone who can reach it; with it, each student logs in and sees only their own
-data (see Student accounts). The login screens, a database, OCR, and
-OneDrive/Canvas import are not built yet. The app has embedding search and four-format model questions, with
+data (see Student accounts). The login screens, OCR, and OneDrive/Canvas import
+are not built yet, and uploaded PDFs are not in the database yet. The app has embedding search and four-format model questions, with
 the cloze quiz as fallback; the knowledge graph research is not in the app yet.
 
 Sprint 2 work under SCRUM-11:
@@ -576,7 +656,9 @@ Sprint 2 work under SCRUM-11:
 
 `.github/workflows/ci.yml` runs on every push and pull request. Its
 `repository-check` job installs the pinned dependencies, checks Ruff lint and
-formatting, runs the offline unittest suite, and builds the Docker image. Python
+formatting, runs the unittest suite, and builds the Docker image. The suite runs with
+`TEST_DATABASE_URL` pointing at a `postgres:16-alpine` service container that lives
+only for the job, so the PostgreSQL tests run too. Python
 3.14.7 matches the runtime image; Node 24 is installed so the browser-logic test
 runs in CI rather than being skipped. Pip downloads are cached using both
 requirements files as the cache key inputs.
