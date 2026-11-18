@@ -5,6 +5,7 @@ import json
 import logging
 import tempfile
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .core import Passage
@@ -32,6 +33,15 @@ def save_document(data_dir: Path, name: str, pdf: bytes, passages: list[Passage]
     # Publish metadata last: startup ignores PDFs left by an interrupted upload.
     _atomic_write(data_dir / f"{document_id}.json", metadata)
     return document_id
+
+
+def uploaded_at(data_dir: Path, document_id: str) -> str | None:
+    """Return when the PDF was last saved, in UTC, or None if it is gone."""
+    try:
+        modified = (data_dir / f"{document_id}.pdf").stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(modified, timezone.utc).isoformat()
 
 
 def load_documents(data_dir: Path) -> dict[str, tuple[str, list[Passage]]]:

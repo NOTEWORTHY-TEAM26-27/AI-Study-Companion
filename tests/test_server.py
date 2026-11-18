@@ -4,12 +4,19 @@ import json
 import os
 import tempfile
 import threading
+import tomllib
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 from noteworthy_app.search import EmbeddingSearch
-from noteworthy_app.server import MAX_PDF_BYTES, create_server
+from noteworthy_app.server import (
+    MAX_PDF_BYTES,
+    PUBLIC_QUESTION_FIELDS,
+    STATIC_TYPES,
+    create_server,
+)
 from tests.fixtures import model_questions, model_reply, study_pdf
 
 
@@ -72,10 +79,255 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(json.loads(content), {"status": "ok"})
         self.assertEqual(self.prompts, [])
 
+    def page(self, path):
+        """GET a path and also return the response headers."""
+        connection = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+        self.addCleanup(connection.close)
+        connection.request("GET", path)
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+
+    def static_folder(self):
+        """Serve pages from an empty temporary folder instead of the package's."""
+        folder = Path(self.storage.name) / "static"
+        folder.mkdir()
+        self.enterContext(mock.patch("noteworthy_app.server.STATIC_DIR", folder))
+        return folder
+
     def test_ui_is_served(self):
         status, content = self.request("/")
         self.assertEqual(status, 200)
         self.assertIn(b"Ask your notes.", content)
+        for path in ["/", "/index.html", "/index.html?doc=../server.py"]:
+            with self.subTest(path=path):
+                status, headers, body = self.page(path)
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+                self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+                self.assertEqual(body, content)
+
+    def test_pages_scripts_styles_and_images_are_served_with_their_types(self):
+        folder = self.static_folder()
+        files = {
+            "library.html": (b"<p>Library</p>", "text/html; charset=utf-8"),
+            "style-2.css": (b"p { color: black; }", "text/css; charset=utf-8"),
+            "app.js": (b"const page = 1;", "text/javascript; charset=utf-8"),
+            "logo.svg": (b"<svg></svg>", "image/svg+xml"),
+        }
+        for name, (content, _) in files.items():
+            (folder / name).write_bytes(content)
+        for name, (content, content_type) in files.items():
+            with self.subTest(name=name):
+                # The query string never changes which file is served.
+                status, headers, body = self.page(f"/{name}?file=index.html")
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Content-Type"], content_type)
+                self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+                self.assertEqual(body, content)
+
+    def test_other_paths_are_not_served(self):
+        for path in [
+            "/..%2fserver.py",
+            "/%2e%2e/x.html",
+            "/%2e%2e%2fserver.py",
+            "/../pyproject.toml",
+            "/static/index.html",
+            "/static",
+            "/Index.html",
+            "/index.HTML",
+            "/index.htm",
+            "/index.html/",
+            "/index.html.",
+            "/index%2ehtml",
+            "/%69ndex.html",
+            "/-index.html",
+            "/.html",
+            "/app.py",
+            "/server.py",
+            "/missing.html",
+            "/missing.html?file=index.html",
+            # Names longer than the file system allows are refused before any lookup.
+            "/" + "a" * 300 + ".html",
+            "/" + "a" * 60000 + ".js",
+        ]:
+            with self.subTest(path=path):
+                status, _, body = self.page(path)
+                self.assertEqual(status, 404)
+                self.assertEqual(json.loads(body), {"error": "Not found"})
+
+    def test_static_files_cannot_lead_out_of_the_folder(self):
+        folder = self.static_folder()
+        (folder / "notes.html").mkdir()
+        outside = Path(self.storage.name) / "secret.html"
+        outside.write_bytes(b"secret")
+        status, _, _ = self.page("/notes.html")
+        self.assertEqual(status, 404)
+        try:
+            (folder / "link.html").symlink_to(outside)
+        except OSError:
+            self.skipTest("This system needs extra rights to create symbolic links.")
+        status, _, body = self.page("/link.html")
+        self.assertEqual(status, 404)
+        self.assertNotIn(b"secret", body)
+
+    def test_package_includes_every_served_file_type(self):
+        with (Path(__file__).parents[1] / "pyproject.toml").open("rb") as file:
+            package_data = tomllib.load(file)["tool"]["setuptools"]["package-data"]
+        self.assertEqual(
+            set(package_data["noteworthy_app"]), {f"static/*.{kind}" for kind in STATIC_TYPES}
+        )
+
+    def test_documents_list_upload_time(self):
+        document_id = self.upload()
+        pdf = self.data_dir / f"{document_id}.pdf"
+        moment = datetime(2026, 11, 1, 9, 30, tzinfo=timezone.utc).timestamp()
+        os.utime(pdf, (moment, moment))
+        status, content = self.request("/api/documents")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            json.loads(content)["documents"],
+            [
+                {
+                    "id": document_id,
+                    "name": "biology.pdf",
+                    "passages": len(self.server.documents[document_id][1]),
+                    "status": "ready",
+                    "uploaded_at": "2026-11-01T09:30:00+00:00",
+                }
+            ],
+        )
+        # A PDF removed while the app runs is still listed, without a time.
+        pdf.unlink()
+        status, content = self.request("/api/documents")
+        self.assertEqual(status, 200)
+        self.assertIsNone(json.loads(content)["documents"][0]["uploaded_at"])
+
+    def test_upload_response_matches_the_listed_document(self):
+        status, uploaded = self.post(
+            "/api/upload", {"name": "biology.pdf", "data": base64.b64encode(study_pdf()).decode()}
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNotNone(uploaded["uploaded_at"])
+        # A page can add the upload to its list, date included, without listing again.
+        status, content = self.request("/api/documents")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(content)["documents"], [uploaded])
+
+    def test_issued_quiz_can_be_loaded_again_without_keys(self):
+        document_id = self.upload()
+        # Cloze questions use answer_index; model questions use answer and excerpts.
+        for generator in [self.server.answer_generator, lambda prompt: model_reply()]:
+            self.server.answer_generator = generator
+            status, issued = self.post("/api/quiz", {"document_id": document_id})
+            self.assertEqual(status, 200)
+            status, content = self.request(f"/api/quiz/{issued['quiz_id']}")
+            self.assertEqual(status, 200)
+            quiz = json.loads(content)
+            self.assertEqual(quiz, issued)
+            self.assertEqual(set(quiz), {"quiz_id", "document_id", "questions"})
+            self.assertEqual(quiz["document_id"], document_id)
+            saved = json.loads(
+                (self.data_dir / "quizzes" / f"{quiz['quiz_id']}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(quiz["questions"]), len(saved["questions"]))
+            for question in quiz["questions"]:
+                self.assertLessEqual(set(question), PUBLIC_QUESTION_FIELDS)
+                for key in ["answer", "answer_index", "source_excerpt", "source_text"]:
+                    self.assertNotIn(key, question)
+
+    def test_quiz_and_attempt_lookups_reject_bad_and_unknown_ids(self):
+        learner = {"X-Learner-Id": "a" * 32}
+        for path, headers, expected in [
+            ("/api/quiz/abc", {}, 400),
+            ("/api/quiz/" + "A" * 32, {}, 400),
+            ("/api/quiz/" + "a" * 33, {}, 400),
+            ("/api/quiz/%2e%2e", {}, 400),
+            ("/api/quiz/" + "f" * 32, {}, 404),
+            ("/api/quiz/../server.py", {}, 404),
+            ("/api/attempts", {}, 400),
+            ("/api/attempts", {"X-Learner-Id": "../x"}, 400),
+            # The ID is read only from the header, never from the URL.
+            ("/api/attempts?learner_id=" + "a" * 32, {}, 400),
+            ("/api/attempts/" + "f" * 32, {}, 400),
+            ("/api/attempts/abc", learner, 400),
+            ("/api/attempts/" + "f" * 32, {"X-Learner-Id": "A" * 32}, 400),
+            ("/api/attempts/" + "f" * 32, learner, 404),
+        ]:
+            with self.subTest(path=path, headers=headers):
+                status, content = self.request(path, headers=headers)
+                self.assertEqual(status, expected)
+                self.assertIn("error", json.loads(content))
+
+    def test_attempts_are_listed_newest_first_and_reopened(self):
+        from tests.test_grading import questions
+
+        document_id = self.upload()
+        _, quiz = self.post("/api/quiz", {"document_id": document_id})
+        # A quiz on a document that is no longer stored.
+        removed = self.server.attempts.issue("0" * 16, questions())
+        learner = {"X-Learner-Id": "a" * 32}
+        with mock.patch("noteworthy_app.attempts.datetime") as clock:
+            clock.now.return_value = datetime(2026, 11, 1, 9, 30, tzinfo=timezone.utc)
+            _, first = self.post(
+                "/api/quiz/submit",
+                {"quiz_id": quiz["quiz_id"], "learner_id": "a" * 32, "answers": [None] * 5},
+            )
+            clock.now.return_value = datetime(2026, 11, 2, 9, 30, tzinfo=timezone.utc)
+            _, second = self.post(
+                "/api/quiz/submit",
+                {
+                    "quiz_id": removed["quiz_id"],
+                    "learner_id": "a" * 32,
+                    "answers": ["B", "True", None, None],
+                },
+            )
+        status, content = self.request("/api/attempts", headers=learner)
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            json.loads(content),
+            {
+                "attempts": [
+                    {
+                        "quiz_id": removed["quiz_id"],
+                        "document_id": "0" * 16,
+                        "document_name": None,
+                        "correct": 2,
+                        "total": 4,
+                        "score": 50,
+                        "created_at": "2026-11-02T09:30:00+00:00",
+                    },
+                    {
+                        "quiz_id": quiz["quiz_id"],
+                        "document_id": document_id,
+                        "document_name": "biology.pdf",
+                        "correct": 0,
+                        "total": 5,
+                        "score": 0,
+                        "created_at": "2026-11-01T09:30:00+00:00",
+                    },
+                ]
+            },
+        )
+        for submitted in [first, second]:
+            status, content = self.request(f"/api/attempts/{submitted['quiz_id']}", headers=learner)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(content), submitted)
+        other = {"X-Learner-Id": "b" * 32}
+        status, content = self.request("/api/attempts", headers=other)
+        self.assertEqual((status, json.loads(content)), (200, {"attempts": []}))
+        status, _ = self.request(f"/api/attempts/{quiz['quiz_id']}", headers=other)
+        self.assertEqual(status, 404)
+        # As on submit, a saved attempt that cannot be read is a server problem.
+        (self.data_dir / "attempts" / ("a" * 32) / f"{quiz['quiz_id']}.json").write_text("{")
+        status, content = self.request(f"/api/attempts/{quiz['quiz_id']}", headers=learner)
+        self.assertEqual(status, 503)
+        self.assertIn("error", json.loads(content))
+        with self.assertLogs("noteworthy_app.attempts", level="WARNING"):
+            status, content = self.request("/api/attempts", headers=learner)
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            [item["quiz_id"] for item in json.loads(content)["attempts"]], [removed["quiz_id"]]
+        )
 
     def test_upload_ask_quiz_flow(self):
         document_id = self.upload()

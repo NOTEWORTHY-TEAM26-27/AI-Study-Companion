@@ -36,9 +36,34 @@ class AttemptStore:
         self._save(self.directory / "quizzes" / f"{quiz_id}.json", quiz)
         return quiz
 
+    def quiz(self, quiz_id: str) -> dict:
+        """Return an issued quiz with its keys; the server filters what it sends."""
+        quiz_id = _identifier(quiz_id)
+        try:
+            quiz = json.loads(
+                (self.directory / "quizzes" / f"{quiz_id}.json").read_text(encoding="utf-8")
+            )
+        except FileNotFoundError as exc:
+            raise LookupError("Quiz not found. Generate a new quiz.") from exc
+        except (ValueError, RecursionError) as exc:
+            raise RuntimeError("Saved quiz could not be read.") from exc
+        if (
+            not isinstance(quiz, dict)
+            or quiz.get("quiz_id") != quiz_id
+            or not isinstance(quiz.get("document_id"), str)
+            or not isinstance(quiz.get("questions"), list)
+            or not all(isinstance(question, dict) for question in quiz["questions"])
+        ):
+            raise RuntimeError("Saved quiz could not be read.")
+        return quiz
+
     @staticmethod
     def _read_attempt(path: Path, learner_id: str) -> dict:
-        record = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except RecursionError as exc:
+            # Deeply nested JSON is just another unreadable record, not a server error.
+            raise ValueError("Invalid saved attempt.") from exc
         if (
             record["learner_id"] != learner_id
             or record["quiz_id"] != path.stem
@@ -49,6 +74,8 @@ class AttemptStore:
             or type(record["total"]) is not int
             or not 0 <= record["correct"] <= record["total"]
             or record["total"] < 1
+            or type(record["score"]) not in {int, float}
+            or not 0 <= record["score"] <= 100
             or not isinstance(record["topic_scores"], dict)
         ):
             raise ValueError("Invalid saved attempt.")
@@ -73,12 +100,7 @@ class AttemptStore:
                     return self._read_attempt(path, learner_id)
                 except (ValueError, TypeError, KeyError) as exc:
                     raise RuntimeError("Saved attempt could not be read.") from exc
-            try:
-                quiz = json.loads(
-                    (self.directory / "quizzes" / f"{quiz_id}.json").read_text(encoding="utf-8")
-                )
-            except FileNotFoundError as exc:
-                raise LookupError("Quiz not found. Generate a new quiz.") from exc
+            quiz = self.quiz(quiz_id)
             result = {
                 **grade_quiz(quiz["questions"], answers),
                 "quiz_id": quiz_id,
@@ -88,6 +110,39 @@ class AttemptStore:
             }
             self._save(path, result)
             return result
+
+    def attempt(self, quiz_id: str, learner_id: str) -> dict:
+        """Return a saved attempt exactly as submit() returned it."""
+        quiz_id, learner_id = _identifier(quiz_id), _identifier(learner_id)
+        try:
+            return self._read_attempt(
+                self.directory / "attempts" / learner_id / f"{quiz_id}.json", learner_id
+            )
+        except FileNotFoundError as exc:
+            raise LookupError("Quiz attempt not found.") from exc
+        except (ValueError, TypeError, KeyError) as exc:
+            raise RuntimeError("Saved attempt could not be read.") from exc
+
+    def history(self, learner_id: str) -> list[dict]:
+        """Summarize a learner's saved attempts, newest first."""
+        learner_id = _identifier(learner_id)
+        attempts = []
+        for path in (self.directory / "attempts" / learner_id).glob("*.json"):
+            try:
+                attempt = self._read_attempt(path, learner_id)
+            except (OSError, ValueError, TypeError, KeyError):
+                LOGGER.warning("Skipping unreadable quiz attempt %s", path.name)
+                continue
+            attempts.append(
+                {
+                    key: attempt[key]
+                    for key in ("quiz_id", "document_id", "correct", "total", "score", "created_at")
+                }
+            )
+        # Saved times are all UTC ISO 8601 strings, so they sort as text.
+        return sorted(
+            attempts, key=lambda item: (item["created_at"], item["quiz_id"]), reverse=True
+        )
 
     def progress(self, learner_id: str, document_id: str | None = None) -> dict:
         learner_id = _identifier(learner_id)

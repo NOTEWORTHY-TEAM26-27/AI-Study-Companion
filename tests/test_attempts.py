@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -108,6 +109,95 @@ class AttemptTests(unittest.TestCase):
                     release.set()
                 self.assertEqual(set(progress.result(timeout=2)), {"topic_scores"})
 
+    def test_issued_quiz_can_be_read_again_with_its_keys(self):
+        self.assertEqual(AttemptStore(self.directory).quiz(self.quiz["quiz_id"]), self.quiz)
+        with self.assertRaises(LookupError):
+            self.store.quiz("f" * 32)
+        for name, content in [("c" * 32, "{"), ("d" * 32, json.dumps({"quiz_id": "d" * 32}))]:
+            (self.directory / "quizzes" / f"{name}.json").write_text(content)
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                self.store.quiz(name)
+        # A saved quiz that cannot be read is reported, not graded as a bad submission.
+        with self.assertRaises(RuntimeError):
+            self.store.submit("c" * 32, LEARNER, [None] * 4)
+
+    def test_saved_attempt_is_returned_as_submitted(self):
+        result = self.submit()
+        self.assertEqual(
+            AttemptStore(self.directory).attempt(self.quiz["quiz_id"], LEARNER), result
+        )
+        with self.assertRaises(LookupError):
+            self.store.attempt(self.quiz["quiz_id"], OTHER)
+        with self.assertRaises(LookupError):
+            self.store.attempt("f" * 32, LEARNER)
+        path = self.directory / "attempts" / LEARNER / f"{self.quiz['quiz_id']}.json"
+        path.write_text(json.dumps({**result, "score": "100"}))
+        with self.assertRaises(RuntimeError):
+            self.store.attempt(self.quiz["quiz_id"], LEARNER)
+
+    def test_history_lists_attempts_newest_first(self):
+        second = self.store.issue("doc2", questions())
+        with mock.patch("noteworthy_app.attempts.datetime") as clock:
+            clock.now.return_value = datetime(2026, 11, 2, 9, 30, tzinfo=timezone.utc)
+            self.store.submit(second["quiz_id"], LEARNER, [None, None, None, "Photosynthesis"])
+            clock.now.return_value = datetime(2026, 11, 1, 9, 30, tzinfo=timezone.utc)
+            self.submit()
+        self.assertEqual(
+            self.store.history(LEARNER),
+            [
+                {
+                    "quiz_id": second["quiz_id"],
+                    "document_id": "doc2",
+                    "correct": 1,
+                    "total": 4,
+                    "score": 25.0,
+                    "created_at": "2026-11-02T09:30:00+00:00",
+                },
+                {
+                    "quiz_id": self.quiz["quiz_id"],
+                    "document_id": "doc1",
+                    "correct": 2,
+                    "total": 4,
+                    "score": 50.0,
+                    "created_at": "2026-11-01T09:30:00+00:00",
+                },
+            ],
+        )
+        self.assertEqual(self.store.history(OTHER), [])
+
+    def test_history_skips_unreadable_attempts(self):
+        result = self.submit()
+        folder = self.directory / "attempts" / LEARNER
+        for name, content in [
+            ("c" * 32, "{"),
+            ("d" * 32, json.dumps({"correct": "bad"})),
+            ("e" * 32, json.dumps({**result, "quiz_id": "e" * 32, "score": None})),
+        ]:
+            (folder / f"{name}.json").write_text(content)
+        with self.assertLogs("noteworthy_app.attempts", level="WARNING") as logs:
+            history = self.store.history(LEARNER)
+        self.assertEqual(len(logs.output), 3)
+        self.assertEqual([item["quiz_id"] for item in history], [self.quiz["quiz_id"]])
+
+    def test_deeply_nested_saved_files_are_unreadable_records(self):
+        # json.loads can raise RecursionError here, which is not a ValueError.
+        self.submit()
+        nested = "[" * 100000 + "]" * 100000
+        (self.directory / "attempts" / LEARNER / f"{'c' * 32}.json").write_text(nested)
+        (self.directory / "quizzes" / f"{'c' * 32}.json").write_text(nested)
+        with self.assertLogs("noteworthy_app.attempts", level="WARNING") as logs:
+            history = self.store.history(LEARNER)
+            progress = self.store.progress(LEARNER)
+        self.assertEqual(len(logs.output), 2)
+        self.assertEqual([item["quiz_id"] for item in history], [self.quiz["quiz_id"]])
+        self.assertEqual(progress["topic_scores"]["Numbers"], {"correct": 2, "total": 2})
+        with self.assertRaisesRegex(RuntimeError, "^Saved attempt could not be read"):
+            self.store.attempt("c" * 32, LEARNER)
+        with self.assertRaisesRegex(RuntimeError, "^Saved quiz could not be read"):
+            self.store.quiz("c" * 32)
+        with self.assertRaisesRegex(RuntimeError, "^Saved quiz could not be read"):
+            self.store.submit("c" * 32, OTHER, [None] * 4)
+
     def test_untrusted_identifiers_cannot_select_storage_paths(self):
         for identifier in ["../outside", "", "A" * 32, None, "a" * 33]:
             with self.subTest(identifier=identifier):
@@ -115,5 +205,13 @@ class AttemptTests(unittest.TestCase):
                     self.store.submit(identifier, LEARNER, [None] * 4)
                 with self.assertRaises(ValueError):
                     self.store.progress(identifier)
+                with self.assertRaises(ValueError):
+                    self.store.quiz(identifier)
+                with self.assertRaises(ValueError):
+                    self.store.attempt(identifier, LEARNER)
+                with self.assertRaises(ValueError):
+                    self.store.attempt(self.quiz["quiz_id"], identifier)
+                with self.assertRaises(ValueError):
+                    self.store.history(identifier)
         with self.assertRaises(LookupError):
             self.store.submit("f" * 32, LEARNER, [None] * 4)

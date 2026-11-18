@@ -17,7 +17,7 @@ noteworthy-app = "noteworthy_app.server:main"
 include = ["noteworthy_app*"]
 
 [tool.setuptools.package-data]
-noteworthy_app = ["static/*.html"]
+noteworthy_app = ["static/*.html", "static/*.css", "static/*.js", "static/*.svg"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
