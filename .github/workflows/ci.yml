@@ -11,6 +11,21 @@ jobs:
   repository-check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A throwaway PostgreSQL that lives only for this job, for the database tests.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: noteworthy
+          POSTGRES_PASSWORD: noteworthy-ci
+          POSTGRES_DB: noteworthy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U noteworthy -d noteworthy"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
@@ -32,6 +47,9 @@ jobs:
       - name: Check lint and formatting
         run: make lint PYTHON=python
       - name: Run offline tests
+        env:
+          # Runs the PostgreSQL tests too; without it they are skipped.
+          TEST_DATABASE_URL: postgresql://noteworthy:noteworthy-ci@localhost:5432/noteworthy
         run: make test PYTHON=python
       - name: Build Docker image
         run: docker build --tag noteworthy-app:ci .

@@ -57,7 +57,7 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(load_documents(self.data_dir), {})
 
     def test_documents_dir_environment_selects_storage_location(self):
-        with patch.dict("os.environ", {"DOCUMENTS_DIR": str(self.data_dir)}):
+        with patch.dict("os.environ", {"DOCUMENTS_DIR": str(self.data_dir), "DATABASE_URL": ""}):
             server = create_server("127.0.0.1", 0)
         self.addCleanup(server.server_close)
         self.assertEqual(server.data_dir, self.data_dir)

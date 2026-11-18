@@ -12,9 +12,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from .accounts import AccountError, Accounts, accounts_from_env
+from .accounts import AccountError, Accounts, FileAccountStore, accounts_from_env
 from .attempts import AttemptStore
 from .core import build_prompt, extract_passages
+from .database import Database, PostgresAccountStore, PostgresAttemptStore
 from .models import generate_answer
 from .question_generator import generate_questions
 from .search import EmbeddingSearch, KeywordSearch, create_search
@@ -75,11 +76,13 @@ class StudyServer(ThreadingHTTPServer):
         data_dir: Path,
         search: KeywordSearch | EmbeddingSearch,
         accounts: Accounts | None = None,
+        attempts: AttemptStore | PostgresAttemptStore | None = None,
     ):
         self.data_dir = data_dir
         self.documents = load_documents(data_dir)
         self.document_lock = threading.Lock()
-        self.attempts = AttemptStore(data_dir)
+        # Quizzes and attempts: files in data_dir unless a PostgreSQL store is given.
+        self.attempts = attempts if attempts is not None else AttemptStore(data_dir)
         self.answer_generator = answer_generator
         self.search = search
         # None keeps the anonymous learner ID; otherwise every API call needs a session.
@@ -255,7 +258,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200, {"status": "logged out"}, accounts.cookie(None))
                     return
                 if path not in ACCOUNT_ROUTES:
-                    account = self._account()
+                    try:
+                        account = self._account()
+                    except RuntimeError as exc:
+                        # The body is not read yet, so drain it like the 401 below.
+                        self._reject(503, str(exc))
+                        return
                     if account is None:
                         self._reject(401, LOG_IN)
                         return
@@ -379,12 +387,21 @@ def create_server(
     directory = Path(
         data_dir if data_dir is not None else os.environ.get("DOCUMENTS_DIR", "data/documents")
     )
+    # With DATABASE_URL, PostgreSQL keeps accounts, sessions, quizzes and attempts.
+    # Uploaded documents stay as files in the directory either way.
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url:
+        database = Database(database_url)
+        attempts, account_store = PostgresAttemptStore(database), PostgresAccountStore(database)
+    else:
+        attempts, account_store = AttemptStore(directory), FileAccountStore(directory / "accounts")
     return StudyServer(
         (host, port),
         answer_generator,
         directory,
         search if search is not None else create_search(),
-        accounts_from_env(directory),
+        accounts_from_env(directory, account_store),
+        attempts,
     )
 
 

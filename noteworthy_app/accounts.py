@@ -129,7 +129,8 @@ def token_hash(token: str) -> str:
 
 
 class AccountStore(Protocol):
-    """Where accounts and sessions are kept; a PostgreSQL store can replace the files.
+    """Where accounts and sessions are kept: FileAccountStore, or PostgresAccountStore in
+    database.py when DATABASE_URL is set.
 
     Records:
     - account: {"id": 32 lowercase hex characters, "email": normalized (trimmed and
@@ -283,7 +284,13 @@ class Accounts:
         email = email.strip().lower()
         key = hashlib.sha256(_utf8(email)).digest()
         self._count_try(key)
-        account = self.store.find_account(email)
+        try:
+            account = self.store.find_account(email)
+        except RuntimeError:
+            # Storage could not be read (for example the database is down), so no password
+            # was checked and the try does not count.
+            self._return_try(key)
+            raise
         stored = account["password_hash"] if account is not None else self.dummy_hash
         # One message for an unknown email and a wrong password, so neither is revealed.
         if not verify_password(password, stored) or account is None:
@@ -308,6 +315,15 @@ class Accounts:
             if count >= LOGIN_LIMIT:
                 raise AccountError(429, TOO_MANY)
             self.tries[key] = (count + 1, start)
+
+    def _return_try(self, key: bytes) -> None:
+        """Take back one try that _count_try counted."""
+        with self.tries_lock:
+            count, start = self.tries.get(key, (0, 0.0))
+            if count > 1:
+                self.tries[key] = (count - 1, start)
+            else:
+                self.tries.pop(key, None)
 
     def log_out(self, token: str | None) -> None:
         if isinstance(token, str) and TOKEN.fullmatch(token):
@@ -343,8 +359,11 @@ class Accounts:
         return session_cookie(token, self.session_seconds, self.cookie_secure)
 
 
-def accounts_from_env(directory: Path) -> Accounts | None:
-    """Turn accounts on only when CLASS_CODE is set; otherwise return None."""
+def accounts_from_env(directory: Path, store: AccountStore | None = None) -> Accounts | None:
+    """Turn accounts on only when CLASS_CODE is set; otherwise return None.
+
+    Accounts are kept in store, or as files in directory/accounts without one.
+    """
     class_code = os.environ.get("CLASS_CODE", "").strip()
     if not class_code:
         return None
@@ -356,7 +375,7 @@ def accounts_from_env(directory: Path) -> Accounts | None:
     if not re.fullmatch(r"[0-9]+", days) or int(days) < 1:
         raise ValueError("SESSION_DAYS must be a whole number of days, at least 1.")
     return Accounts(
-        FileAccountStore(directory / "accounts"),
+        store if store is not None else FileAccountStore(directory / "accounts"),
         class_code,
         int(days) * 24 * 60 * 60,
         os.environ.get("COOKIE_SECURE", "").strip() == "1",

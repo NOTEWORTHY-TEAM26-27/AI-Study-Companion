@@ -5,6 +5,32 @@ services:
   app:
     env_file: .env
     restart: unless-stopped
+    environment:
+      # No default password on staging. deploy_staging.sh adds one to .env on the first deploy.
+      DATABASE_URL: postgresql://noteworthy:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (deploy_staging.sh makes one)}@db:5432/noteworthy
+
+  db:
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (deploy_staging.sh makes one)}
+    # Small settings for the 2 GB Droplet, which also runs the app and its search model.
+    mem_limit: 256m
+    command:
+      - postgres
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - effective_cache_size=128MB
+      - -c
+      - max_connections=20
+      # Closes a session left idle in an open transaction (a psql with a forgotten BEGIN),
+      # so its locks cannot block the app for long.
+      - -c
+      - idle_in_transaction_session_timeout=60s
 
   caddy:
     image: caddy:2

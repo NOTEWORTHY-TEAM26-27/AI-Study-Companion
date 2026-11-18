@@ -24,6 +24,8 @@ class ServerTests(unittest.TestCase):
     def setUp(self):
         # Keyword search unless a test sets one; never load the real search model.
         self.enterContext(mock.patch.dict(os.environ, {"RETRIEVAL": "keyword"}))
+        # These tests read the saved files, so never use a database from the shell.
+        os.environ.pop("DATABASE_URL", None)
         # The fake model's reply is not JSON, so quizzes use cloze questions; that warning
         # is checked in test_question_generator.
         self.enterContext(mock.patch("noteworthy_app.question_generator.LOGGER"))
