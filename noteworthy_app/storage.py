@@ -1,8 +1,9 @@
-"""Store PDFs and extracted passages on disk for the single-process prototype."""
+"""Store source files and extracted passages on disk for the single-process prototype."""
 
 import hashlib
 import json
 import logging
+import math
 import re
 import tempfile
 from dataclasses import asdict
@@ -28,9 +29,14 @@ def _atomic_write(path: Path, data: bytes) -> None:
 def save_document(
     data_dir: Path, name: str, pdf: bytes, passages: list[Passage], owner: str | None = None
 ) -> str:
-    """Save a PDF and its passages; return its ID. owner is a student's account ID."""
+    """Save a document and its passages; return its ID. owner is a student's account ID."""
     data_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(name).suffix.lower()
+    if suffix not in {".pdf", ".vtt", ".txt"}:
+        raise ValueError("Choose a PDF, VTT or TXT file.")
     record = {"name": name, "passages": [asdict(passage) for passage in passages]}
+    if suffix != ".pdf":
+        record["file_suffix"] = suffix
     if owner is None:
         document_id = hashlib.sha256(pdf).hexdigest()[:16]
     else:
@@ -38,16 +44,16 @@ def save_document(
         document_id = hashlib.sha256(owner.encode() + b":" + pdf).hexdigest()[:16]
         record["owner"] = owner
     metadata = json.dumps(record).encode()
-    _atomic_write(data_dir / f"{document_id}.pdf", pdf)
+    _atomic_write(data_dir / f"{document_id}{suffix}", pdf)
     # Publish metadata last: startup ignores PDFs left by an interrupted upload.
     _atomic_write(data_dir / f"{document_id}.json", metadata)
     return document_id
 
 
-def uploaded_at(data_dir: Path, document_id: str) -> str | None:
-    """Return when the PDF was last saved, in UTC, or None if it is gone."""
+def uploaded_at(data_dir: Path, document_id: str, name: str = "document.pdf") -> str | None:
+    """Return when the source was last saved, in UTC, or None if it is gone."""
     try:
-        modified = (data_dir / f"{document_id}.pdf").stat().st_mtime
+        modified = (data_dir / f"{document_id}{Path(name).suffix.lower()}").stat().st_mtime
     except OSError:
         return None
     return datetime.fromtimestamp(modified, timezone.utc).isoformat()
@@ -59,17 +65,28 @@ def load_documents(data_dir: Path) -> dict[str, tuple[str, list[Passage], str | 
     documents = {}
     for path in sorted(data_dir.glob("*.json")):
         try:
-            if not path.with_suffix(".pdf").is_file():
-                raise ValueError("Original PDF is missing.")
             metadata = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(metadata, dict):
+                raise ValueError("Invalid document metadata.")
+            suffix = metadata.get("file_suffix", ".pdf")
+            if suffix not in {".pdf", ".vtt", ".txt"} or not path.with_suffix(suffix).is_file():
+                raise ValueError("Original document is missing.")
             name = metadata["name"]
             passages = [Passage(**item) for item in metadata["passages"]]
             if not isinstance(name, str) or not name.strip() or not passages:
                 raise ValueError("Invalid document metadata.")
             if any(
                 not isinstance(p.id, str)
-                or not isinstance(p.page, int)
-                or p.page < 1
+                or (p.page is not None and (type(p.page) is not int or p.page < 1))
+                or (suffix == ".pdf") != (p.page is not None)
+                or (
+                    p.start_seconds is not None
+                    and (
+                        type(p.start_seconds) not in {int, float}
+                        or not math.isfinite(p.start_seconds)
+                        or p.start_seconds < 0
+                    )
+                )
                 or not isinstance(p.text, str)
                 or not p.text.strip()
                 for p in passages

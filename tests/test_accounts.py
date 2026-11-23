@@ -1041,7 +1041,7 @@ class AccountServerTests(unittest.TestCase):
                 payload = {"document_id": document_id, "question": "Photosynthesis sunlight"}
                 self.assertEqual(
                     self.post(path, payload, bob),
-                    (404, {"error": "Upload the PDF again to continue."}),
+                    (404, {"error": "Upload the document again to continue."}),
                 )
         # Another student's document never reaches the model.
         self.assertEqual(len(self.prompts), prompts)

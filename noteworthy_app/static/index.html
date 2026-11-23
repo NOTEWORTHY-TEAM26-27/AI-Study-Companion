@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NoteWorthy · PDF study companion</title>
+<title>NoteWorthy · Notes study companion</title>
 <style>
   :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; background: #fff; color: #000; }
   body { max-width: 860px; margin: 0 auto; padding: 32px 18px 70px; }
@@ -30,13 +30,13 @@
   .document span { min-width: 0; overflow-wrap: anywhere; }
   .document button { margin-top: 0; padding: 4px 10px; }
 </style>
-<header><p class="eyebrow">NoteWorthy / Sprint 1 prototype</p><h1>Ask your notes.</h1><p class="muted">Upload one typed PDF, ask a question, and inspect the passages behind the answer.</p></header>
+<header><p class="eyebrow">NoteWorthy / Sprint 1 prototype</p><h1>Ask your notes.</h1><p class="muted">Upload a typed PDF or lecture transcript, ask a question, and inspect the sources behind the answer.</p></header>
 <main class="grid">
-  <section><h2>Your PDF</h2><label for="pdf">Choose a typed PDF</label><input id="pdf" type="file" accept="application/pdf,.pdf"><p class="muted">PDF only, up to 12 MB.</p><button id="upload">Upload PDF</button><p id="status" role="status" class="muted"></p><div id="documents"></div></section>
+  <section><h2>Your notes</h2><label for="pdf">Choose a PDF or lecture transcript</label><input id="pdf" type="file" accept="application/pdf,text/vtt,text/plain,.pdf,.vtt,.txt"><p class="muted">PDF, VTT or TXT, up to 12 MB. Use a timestamped transcript for lecture time citations.</p><button id="upload">Upload notes</button><p id="status" role="status" class="muted"></p><div id="documents"></div></section>
   <section><h2>Ask a question</h2><label for="question">Question</label><input id="question" type="text" placeholder="What does the document say about…?"><button id="ask" disabled>Find answer</button><p id="answer" aria-live="polite"></p></section>
 </main>
 <section style="margin-top:18px"><h2>Source passages</h2><div id="sources" class="muted">Sources for the answer appear here.</div></section>
-<section style="margin-top:18px"><h2>Practice quiz</h2><p class="muted">Multiple choice, true/false, fill-in-the-blank, and short-answer questions generated from the uploaded PDF. Each answer links to its source paragraph.</p><button id="makeQuiz" disabled>Generate a quiz</button><div id="quiz"></div><p id="quizResult" role="status"></p></section>
+<section style="margin-top:18px"><h2>Practice quiz</h2><p class="muted">Multiple choice, true/false, fill-in-the-blank, and short-answer questions generated from the uploaded notes. Each answer links to its source paragraph.</p><button id="makeQuiz" disabled>Generate a quiz</button><div id="quiz"></div><p id="quizResult" role="status"></p></section>
 <section style="margin-top:18px"><h2>Scores by topic</h2><div id="topicScores"></div></section>
 <script>
   let selectedDocument = null;
@@ -76,11 +76,14 @@
     try { localStorage.setItem(MY_DOCUMENTS_KEY, JSON.stringify([...ids])); } catch (error) { /* storage unavailable */ }
   }
   function checkFile(file) {
-    if (!file) return 'Choose a PDF first.';
-    if (!file.name.toLowerCase().endsWith('.pdf')) return 'Choose a PDF file.';
-    if (file.size === 0) return 'The file is empty. Choose a PDF that has content.';
-    if (file.size > MAX_PDF_BYTES) return 'The PDF is larger than 12 MB. Choose a smaller file.';
+    if (!file) return 'Choose a PDF or transcript first.';
+    if (!/\.(pdf|vtt|txt)$/i.test(file.name)) return 'Choose a PDF, VTT or TXT file.';
+    if (file.size === 0) return 'The file is empty. Choose a file that has content.';
+    if (file.size > MAX_PDF_BYTES) return 'The file is larger than 12 MB. Choose a smaller file.';
     return '';
+  }
+  function sourceLocation(source) {
+    return source.citation || `page ${source.page}`;
   }
   function selectDocument(uploadedDocument) {
     if (!selectedDocument || selectedDocument.id !== uploadedDocument.id) {
@@ -148,7 +151,7 @@
     const pending = {name: file.name, status: 'processing'};
     pendingUploads = pendingUploads.filter(item => item.name !== file.name).concat(pending);
     renderDocuments(storedDocuments);
-    $('upload').disabled = true; $('status').textContent = 'Reading PDF…';
+    $('upload').disabled = true; $('status').textContent = 'Reading notes…';
     try {
       const data = await new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -182,7 +185,7 @@
       const sources = $('sources'); sources.replaceChildren();
       for (const source of result.sources) {
         const item = document.createElement('div'); item.className = 'source';
-        const title = document.createElement('strong'); title.textContent = `${source.id} · page ${source.page}`;
+        const title = document.createElement('strong'); title.textContent = `${source.id} · ${sourceLocation(source)}`;
         const text = document.createElement('p'); text.textContent = source.text;
         item.append(title, text); sources.append(item);
       }
@@ -269,7 +272,7 @@
           if (!selectedDocument || selectedDocument.id !== documentId || currentQuizId !== result.quiz_id) return;
           for (const item of graded.results) {
             const note = document.createElement('p');
-            note.textContent = `${item.correct ? 'Correct' : `Answer: ${[].concat(item.expected_answer).join(', ')}`} · ${item.source_id}, page ${item.page}`;
+            note.textContent = `${item.correct ? 'Correct' : `Answer: ${[].concat(item.expected_answer).join(', ')}`} · ${item.source_id}, ${sourceLocation(item)}`;
             container.children[graded.results.indexOf(item)].append(note);
           }
           $('quizResult').textContent = `Score: ${graded.correct} / ${graded.total}`;
