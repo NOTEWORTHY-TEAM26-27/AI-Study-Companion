@@ -14,12 +14,13 @@ from urllib.parse import parse_qs, urlsplit
 
 from .accounts import AccountError, Accounts, FileAccountStore, accounts_from_env
 from .attempts import AttemptStore
-from .core import build_prompt, extract_passages
+from .core import build_prompt, extract_passages, location
 from .database import Database, PostgresAccountStore, PostgresAttemptStore
 from .models import generate_answer
 from .question_generator import generate_questions
 from .search import EmbeddingSearch, KeywordSearch, create_search
 from .storage import load_documents, save_document, uploaded_at
+from .transcripts import extract_transcript
 
 STATIC_DIR = Path(__file__).parent / "static"
 # Lower-case letters, digits and hyphens only, so a URL cannot name any other path.
@@ -51,6 +52,8 @@ PUBLIC_QUESTION_FIELDS = {
     "page",
     "source_page",
     "topic",
+    "start_seconds",
+    "citation",
 }
 
 
@@ -197,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
                             "name": name,
                             "passages": len(passages),
                             "status": "ready",
-                            "uploaded_at": uploaded_at(self.server.data_dir, key),
+                            "uploaded_at": uploaded_at(self.server.data_dir, key, name),
                         }
                         for key, (name, passages, document_owner) in self.server.documents.items()
                         if document_owner == owner
@@ -305,8 +308,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/upload":
                 name = self._string(payload, "name", 180)
-                if not name.lower().endswith(".pdf"):
-                    raise ValueError("Choose a PDF file.")
+                suffix = Path(name).suffix.lower()
+                if suffix not in {".pdf", ".vtt", ".txt"}:
+                    raise ValueError("Choose a PDF, VTT or TXT file.")
                 if payload.get("data") == "":
                     raise ValueError("The file is empty. Choose a PDF that has content.")
                 data = self._string(payload, "data", MAX_REQUEST_BYTES)
@@ -314,7 +318,9 @@ class Handler(BaseHTTPRequestHandler):
                 if len(pdf) > MAX_PDF_BYTES:
                     self._json(413, {"error": "PDF must be at most 12 MB."})
                     return
-                passages = extract_passages(pdf)
+                passages = (
+                    extract_passages(pdf) if suffix == ".pdf" else extract_transcript(pdf, suffix)
+                )
                 with self.server.document_lock:
                     document_id = save_document(self.server.data_dir, name, pdf, passages, owner)
                     self.server.documents[document_id] = (name, passages, owner)
@@ -330,7 +336,7 @@ class Handler(BaseHTTPRequestHandler):
                         "name": name,
                         "passages": len(passages),
                         "status": "ready",
-                        "uploaded_at": uploaded_at(self.server.data_dir, document_id),
+                        "uploaded_at": uploaded_at(self.server.data_dir, document_id, name),
                     },
                 )
                 return
@@ -339,7 +345,7 @@ class Handler(BaseHTTPRequestHandler):
                 document = self.server.documents.get(document_id)
             # Another student's document is not found either, before any model call.
             if document is None or document[2] != owner:
-                self._json(404, {"error": "Upload the PDF again to continue."})
+                self._json(404, {"error": "Upload the document again to continue."})
                 return
             passages = document[1]
             if path == "/api/quiz":
@@ -350,7 +356,8 @@ class Handler(BaseHTTPRequestHandler):
             question = self._string(payload, "question", 1000)
             matches = self.server.search.retrieve(document_id, passages, question)
             if not matches:
-                self._json(200, {"answer": "The PDF does not say.", "sources": []})
+                kind = "PDF" if passages[0].page is not None else "lecture transcript"
+                self._json(200, {"answer": f"The {kind} does not say.", "sources": []})
                 return
             answer = self.server.answer_generator(build_prompt(question, matches))
             self._json(
@@ -358,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "answer": answer,
                     "sources": [
-                        {"id": passage.id, "page": passage.page, "text": passage.text}
+                        {"id": passage.id, **location(passage), "text": passage.text}
                         for passage in matches
                     ],
                 },

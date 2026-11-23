@@ -91,7 +91,14 @@ def grade_quiz(questions: list[dict], answers: list) -> dict:
                 "correct": correct,
                 "expected_answer": display,
                 "topic": topic,
-                "page": page,
+                **(
+                    {
+                        "citation": question["citation"],
+                        "start_seconds": question.get("start_seconds"),
+                    }
+                    if "citation" in question
+                    else {"page": page}
+                ),
                 "source_id": question.get("source_id"),
                 "source_text": question.get("source_text", question.get("source_excerpt", "")),
             }

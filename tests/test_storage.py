@@ -31,6 +31,9 @@ class StorageTests(unittest.TestCase):
         )
         (self.data_dir / "broken.pdf").write_bytes(study_pdf())
         for metadata in [
+            "[]",
+            "null",
+            '"text"',
             "not json",
             json.dumps({"name": None, "passages": []}),
             json.dumps(

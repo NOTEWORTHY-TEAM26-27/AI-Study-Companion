@@ -101,7 +101,7 @@ class EmbeddingSearch:
             vectors = self.index(document_id, passages)
         scores = vectors @ self._encode([question])[0]
         order = sorted(
-            range(len(passages)), key=lambda i: (-scores[i], passages[i].page, passages[i].id)
+            range(len(passages)), key=lambda i: (-scores[i], passages[i].page or 0, passages[i].id)
         )
         best = [i for i in order[:limit] if scores[i] >= self._min_score]
         if not best:

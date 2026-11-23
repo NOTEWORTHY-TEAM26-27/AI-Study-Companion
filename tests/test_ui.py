@@ -93,7 +93,7 @@ const context = {
     }
     if (path === '/api/ask') {
       if (server.askGate) await server.askGate;
-      return {ok: true, json: async () => ({answer: 'Answer for ' + body.document_id, sources: []})};
+      return {ok: true, json: async () => ({answer: 'Answer for ' + body.document_id, sources: server.askSources || []})};
     }
     if (path === '/api/quiz' && server.quizMode === 'formats') {
       return {ok: true, json: async () => ({quiz_id: String(++server.quizCount).padStart(32, 'c'), questions: [
@@ -148,17 +148,18 @@ const scriptSource = fs.readFileSync(0, 'utf8');
   assert.equal(el('topicScores').children[0].children[0].textContent, 'Page 1: 50% (1/2)');
 
   // Files are checked before upload, and a rejected file sends no request.
-  assert.equal(context.checkFile(undefined), 'Choose a PDF first.');
-  assert.equal(context.checkFile({name: 'notes.txt', size: 10}), 'Choose a PDF file.');
-  assert.equal(context.checkFile({name: 'empty.PDF', size: 0}), 'The file is empty. Choose a PDF that has content.');
+  assert.equal(context.checkFile(undefined), 'Choose a PDF or transcript first.');
+  assert.equal(context.checkFile({name: 'notes.txt', size: 10}), '');
+  assert.equal(context.checkFile({name: 'lecture.VTT', size: 10}), '');
+  assert.equal(context.checkFile({name: 'empty.PDF', size: 0}), 'The file is empty. Choose a file that has content.');
   assert.equal(
     context.checkFile({name: 'big.pdf', size: 12 * 1024 * 1024 + 1}),
-    'The PDF is larger than 12 MB. Choose a smaller file.'
+    'The file is larger than 12 MB. Choose a smaller file.'
   );
   assert.equal(context.checkFile({name: 'limit.pdf', size: 12 * 1024 * 1024}), '');
-  el('pdf').files = [{name: 'notes.txt', size: 10}];
+  el('pdf').files = [{name: 'notes.docx', size: 10}];
   await el('upload').onclick();
-  assert.equal(el('status').textContent, 'Choose a PDF file.');
+  assert.equal(el('status').textContent, 'Choose a PDF, VTT or TXT file.');
   assert.equal(server.posts, 0);
 
   // A successful upload shows Processing, then Ready, and becomes the selected document.
@@ -206,8 +207,10 @@ const scriptSource = fs.readFileSync(0, 'utf8');
   server.askGate = null;
   assert.equal(el('answer').textContent, '');
   assert.equal(el('ask').disabled, false);
+  server.askSources = [{id: 't1', citation: 'lecture, 12:40', start_seconds: 760, text: 'Lecture source.'}];
   await el('ask').onclick();
   assert.equal(el('answer').textContent, 'Answer for mine1');
+  assert.equal(el('sources').children[0].children[0].textContent, 't1 · lecture, 12:40');
 
   // Submit to the server, keep a failed save retryable, and never award local credit.
   await el('makeQuiz').onclick();

@@ -7,7 +7,7 @@ import re
 import unicodedata
 from collections.abc import Callable
 
-from .core import STOPWORDS, WORD, Passage
+from .core import STOPWORDS, WORD, Passage, location
 
 # A sentence ends at . ! or ?, after any closing quotes or brackets.
 SENTENCE_END = re.compile(r"[.!?][\"')\]\u2019\u201d]*\s+")
@@ -188,8 +188,8 @@ def generate_quiz(
                 "options": options,
                 "answer_index": answer_index,
                 "source_id": passage.id,
-                "page": passage.page,
-                "topic": f"Page {passage.page}",
+                **location(passage),
+                "topic": location(passage).get("citation", f"Page {passage.page}"),
                 "source_text": passage.text,
             }
         )

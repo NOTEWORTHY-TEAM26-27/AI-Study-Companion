@@ -59,6 +59,31 @@ restarts and redeploys. One attempt per browser and issued quiz is
 saved atomically. Retrying a submission returns that same result and does not
 count it twice. Generate another quiz to make a new attempt.
 
+## Lecture transcripts (SCRUM-217)
+
+The existing upload picker also accepts UTF-8 `.vtt` and `.txt` transcripts, up to
+12 MB. Select the uploaded lecture to ask questions or generate a quiz, just as
+for a PDF. Answer sources and quiz feedback show the start of the source passage,
+such as `lecture, 12:40`, instead of a page. Uploaded files and passage timestamps
+survive restarts. The same account ownership checks apply to every file type.
+
+VTT supports cue IDs, multiline captions, speaker/formatting tags and timestamps
+with or without hours. Caption fragments are joined through a sentence boundary,
+with at most 115 words per passage; the citation is the first cue's time. TXT can
+use timestamps at the start of lines, for example `[12:40] Photosynthesis uses
+sunlight.` or `1:12:40 Photosynthesis uses sunlight.` Untimed TXT remains usable,
+but its source says `lecture, time unavailable`; the app never invents a time.
+
+The recording/transcription task (SCRUM-216) can hand off a saved UTF-8 VTT through
+the same `POST /api/upload` JSON contract: `{"name":"lecture.vtt","data":"<base64>"}`.
+No audio is transcribed by this endpoint. `POST /api/ask` sources, public quiz
+questions and submitted quiz results include `start_seconds` (number or null) and
+`citation` for transcripts; they omit `page` and `source_page`. PDF responses keep
+their page fields. The question model supplies a passage `source_id`; the server
+copies the location from that verified passage, never from a model-supplied time.
+
+### Quiz progress API
+
 Progress uses an anonymous browser ID stored in localStorage, alongside document
 IDs and the last selected PDF ID. Scores themselves are stored on the server.
 Progress is separate for each browser, not an authenticated account; clearing browser storage loses
