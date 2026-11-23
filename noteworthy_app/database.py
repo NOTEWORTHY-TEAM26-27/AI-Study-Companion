@@ -269,10 +269,11 @@ class PostgresAttemptStore:
             return self._quiz(conn, quiz_id, owner)
 
     @staticmethod
-    def _attempt(conn, quiz_id: str, learner_id: str) -> dict | None:
+    def _attempt(conn, quiz_id: str, learner_id: str, owner: str | None) -> dict | None:
         row = conn.execute(
-            "SELECT result::text FROM attempts WHERE learner_id = %s AND quiz_id = %s",
-            (learner_id, quiz_id),
+            "SELECT a.result::text FROM attempts a JOIN quizzes q ON q.quiz_id = a.quiz_id"
+            " WHERE a.learner_id = %s AND a.quiz_id = %s AND q.owner IS NOT DISTINCT FROM %s",
+            (learner_id, quiz_id, owner),
         ).fetchone()
         if row is None:
             return None
@@ -286,10 +287,11 @@ class PostgresAttemptStore:
     ) -> dict:
         quiz_id, learner_id = _identifier(quiz_id), _identifier(learner_id)
         with self.database.connect() as conn:
-            saved = self._attempt(conn, quiz_id, learner_id)
+            # Check ownership before returning a previous submission.
+            quiz = self._quiz(conn, quiz_id, owner)
+            saved = self._attempt(conn, quiz_id, learner_id, owner)
             if saved is not None:
                 return saved
-            quiz = self._quiz(conn, quiz_id, owner)
             created_at = datetime.now(timezone.utc)
             result = {
                 **grade_quiz(quiz["questions"], answers),
@@ -308,26 +310,30 @@ class PostgresAttemptStore:
                 (learner_id, quiz_id, quiz["document_id"], created_at, json.dumps(result)),
             ).fetchone()
             if added is None:
-                return self._attempt(conn, quiz_id, learner_id)
+                return self._attempt(conn, quiz_id, learner_id, owner)
         return result
 
-    def attempt(self, quiz_id: str, learner_id: str) -> dict:
+    def attempt(self, quiz_id: str, learner_id: str, owner: str | None = None) -> dict:
         """Return a saved attempt exactly as submit() returned it."""
         quiz_id, learner_id = _identifier(quiz_id), _identifier(learner_id)
         with self.database.connect() as conn:
-            attempt = self._attempt(conn, quiz_id, learner_id)
+            attempt = self._attempt(conn, quiz_id, learner_id, owner)
         if attempt is None:
             raise LookupError("Quiz attempt not found.")
         return attempt
 
-    def _attempts(self, learner_id: str, document_id: str | None = None) -> list[dict]:
+    def _attempts(
+        self, learner_id: str, document_id: str | None = None, owner: str | None = None
+    ) -> list[dict]:
         """Return a learner's readable attempts, oldest first; skip unreadable ones."""
         with self.database.connect() as conn:
             rows = conn.execute(
-                "SELECT quiz_id, result::text FROM attempts WHERE learner_id = %(learner)s"
-                " AND (%(document)s::text IS NULL OR document_id = %(document)s)"
-                " ORDER BY created_at, quiz_id",
-                {"learner": learner_id, "document": document_id},
+                "SELECT a.quiz_id, a.result::text FROM attempts a"
+                " JOIN quizzes q ON q.quiz_id = a.quiz_id"
+                " WHERE a.learner_id = %(learner)s AND q.owner IS NOT DISTINCT FROM %(owner)s"
+                " AND (%(document)s::text IS NULL OR a.document_id = %(document)s)"
+                " ORDER BY a.created_at, a.quiz_id",
+                {"learner": learner_id, "document": document_id, "owner": owner},
             ).fetchall()
         attempts = []
         for quiz_id, text in rows:
@@ -337,7 +343,7 @@ class PostgresAttemptStore:
                 LOGGER.warning("Skipping unreadable quiz attempt %s", quiz_id)
         return attempts
 
-    def history(self, learner_id: str) -> list[dict]:
+    def history(self, learner_id: str, owner: str | None = None) -> list[dict]:
         """Summarize a learner's saved attempts, newest first."""
         learner_id = _identifier(learner_id)
         return [
@@ -345,16 +351,18 @@ class PostgresAttemptStore:
                 key: attempt[key]
                 for key in ("quiz_id", "document_id", "correct", "total", "score", "created_at")
             }
-            for attempt in reversed(self._attempts(learner_id))
+            for attempt in reversed(self._attempts(learner_id, owner=owner))
         ]
 
-    def progress(self, learner_id: str, document_id: str | None = None) -> dict:
+    def progress(
+        self, learner_id: str, document_id: str | None = None, owner: str | None = None
+    ) -> dict:
         learner_id = _identifier(learner_id)
         topics = {}
         # A document ID PostgreSQL cannot store matches no saved attempt.
         if document_id is not None and not _storable(document_id):
             return {"topic_scores": topics}
-        for attempt in self._attempts(learner_id, document_id):
+        for attempt in self._attempts(learner_id, document_id, owner):
             for topic, values in attempt["topic_scores"].items():
                 totals = topics.setdefault(topic, {"correct": 0, "total": 0})
                 totals["correct"] += values["correct"]

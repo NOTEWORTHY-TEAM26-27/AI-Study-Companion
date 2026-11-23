@@ -118,12 +118,13 @@ class AttemptStore:
         quiz_id, learner_id = _identifier(quiz_id), _identifier(learner_id)
         path = self.directory / "attempts" / learner_id / f"{quiz_id}.json"
         with self.lock:
+            # Check the quiz owner before returning an already saved attempt, too.
+            quiz = self.quiz(quiz_id, owner)
             if path.exists():
                 try:
                     return self._read_attempt(path, learner_id)
                 except (ValueError, TypeError, KeyError) as exc:
                     raise RuntimeError("Saved attempt could not be read.") from exc
-            quiz = self.quiz(quiz_id, owner)
             result = {
                 **grade_quiz(quiz["questions"], answers),
                 "quiz_id": quiz_id,
@@ -134,27 +135,35 @@ class AttemptStore:
             self._save(path, result)
             return result
 
-    def attempt(self, quiz_id: str, learner_id: str) -> dict:
+    def _visible_attempt(self, path: Path, learner_id: str, owner: str | None) -> dict:
+        record = self._read_attempt(path, learner_id)
+        # Legacy attempts have no owner field; their issued quiz is the authority.
+        self.quiz(path.stem, owner)
+        return record
+
+    def attempt(self, quiz_id: str, learner_id: str, owner: str | None = None) -> dict:
         """Return a saved attempt exactly as submit() returned it."""
         quiz_id, learner_id = _identifier(quiz_id), _identifier(learner_id)
         try:
-            return self._read_attempt(
-                self.directory / "attempts" / learner_id / f"{quiz_id}.json", learner_id
+            return self._visible_attempt(
+                self.directory / "attempts" / learner_id / f"{quiz_id}.json", learner_id, owner
             )
         except FileNotFoundError as exc:
             raise LookupError("Quiz attempt not found.") from exc
         except (ValueError, TypeError, KeyError) as exc:
             raise RuntimeError("Saved attempt could not be read.") from exc
 
-    def history(self, learner_id: str) -> list[dict]:
+    def history(self, learner_id: str, owner: str | None = None) -> list[dict]:
         """Summarize a learner's saved attempts, newest first."""
         learner_id = _identifier(learner_id)
         attempts = []
         for path in (self.directory / "attempts" / learner_id).glob("*.json"):
             try:
-                attempt = self._read_attempt(path, learner_id)
-            except (OSError, ValueError, TypeError, KeyError):
+                attempt = self._visible_attempt(path, learner_id, owner)
+            except (OSError, ValueError, TypeError, KeyError, RuntimeError):
                 LOGGER.warning("Skipping unreadable quiz attempt %s", path.name)
+                continue
+            except LookupError:
                 continue
             attempts.append(
                 {
@@ -167,16 +176,20 @@ class AttemptStore:
             attempts, key=lambda item: (item["created_at"], item["quiz_id"]), reverse=True
         )
 
-    def progress(self, learner_id: str, document_id: str | None = None) -> dict:
+    def progress(
+        self, learner_id: str, document_id: str | None = None, owner: str | None = None
+    ) -> dict:
         learner_id = _identifier(learner_id)
         topics = {}
         # Published attempts are immutable and atomically replaced. Readers need not
         # hold the submit lock; a concurrent new attempt appears on the next read.
         for path in (self.directory / "attempts" / learner_id).glob("*.json"):
             try:
-                attempt = self._read_attempt(path, learner_id)
-            except (OSError, ValueError, TypeError, KeyError):
+                attempt = self._visible_attempt(path, learner_id, owner)
+            except (OSError, ValueError, TypeError, KeyError, RuntimeError):
                 LOGGER.warning("Skipping unreadable quiz attempt %s", path.name)
+                continue
+            except LookupError:
                 continue
             if document_id is not None and attempt["document_id"] != document_id:
                 continue

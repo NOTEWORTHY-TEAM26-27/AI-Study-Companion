@@ -1120,6 +1120,28 @@ class AccountServerTests(unittest.TestCase):
         status, documents = self.get("/api/documents", token)
         self.assertEqual({item["id"] for item in documents["documents"]}, {old, document_id})
 
+    def test_disabling_accounts_does_not_expose_saved_scores_or_results(self):
+        token = self.sign_up()
+        account_id = self.account_id("a@uta.edu")
+        document_id = self.upload(token)
+        quiz, result = self.quiz_and_submit(token, document_id)
+        self.restart(CLASS_CODE=None)
+        headers = {"X-Learner-Id": account_id}
+        self.assertEqual(self.get("/api/attempts", headers=headers), (200, {"attempts": []}))
+        self.assertEqual(self.get("/api/progress", headers=headers), (200, {"topic_scores": {}}))
+        self.assertEqual(self.get(f"/api/attempts/{quiz['quiz_id']}", headers=headers)[0], 404)
+        self.assertEqual(
+            self.post(
+                "/api/quiz/submit",
+                {"quiz_id": quiz["quiz_id"], "learner_id": account_id, "answers": []},
+            )[0],
+            404,
+        )
+        # Hiding these records must not delete them: turning accounts back on restores them.
+        self.restart(CLASS_CODE=CLASS_CODE)
+        self.assertEqual(self.get(f"/api/attempts/{quiz['quiz_id']}", token), (200, result))
+        self.assertEqual(len(self.get("/api/attempts", token)[1]["attempts"]), 1)
+
     def test_submit_uses_the_account_not_the_learner_id(self):
         token = self.sign_up()
         account_id = self.account_id("a@uta.edu")

@@ -206,11 +206,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/progress":
                 params = parse_qs(urlsplit(self.path).query)
                 progress = self.server.attempts.progress(
-                    learner_id, params.get("document_id", [None])[0]
+                    learner_id, params.get("document_id", [None])[0], owner
                 )
                 self._json(200, progress)
             elif path == "/api/attempts":
-                attempts = self.server.attempts.history(learner_id)
+                attempts = self.server.attempts.history(learner_id, owner)
                 with self.server.document_lock:
                     names = {
                         key: name
@@ -224,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
             elif quiz := QUIZ_ROUTE.fullmatch(path):
                 self._json(200, _public_quiz(self.server.attempts.quiz(quiz[1], owner)))
             elif attempt := ATTEMPT_ROUTE.fullmatch(path):
-                self._json(200, self.server.attempts.attempt(attempt[1], learner_id))
+                self._json(200, self.server.attempts.attempt(attempt[1], learner_id, owner))
             else:
                 self._json(404, {"error": "Not found"})
         except ValueError as exc:
