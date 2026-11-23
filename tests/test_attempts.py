@@ -150,6 +150,37 @@ class AttemptStoreContract:
         self.assertEqual(self.store.history(OTHER), [])
         self.assertEqual(self.store.progress(OTHER), {"topic_scores": {}})
 
+    def test_saved_owned_attempt_needs_its_quiz_owner(self):
+        owned = self.store.issue("private", questions(), owner=LEARNER)
+        result = self.store.submit(owned["quiz_id"], LEARNER, [None] * 4, LEARNER)
+        for owner in [None, OTHER]:
+            with self.subTest(owner=owner):
+                with self.assertRaises(LookupError):
+                    self.store.attempt(owned["quiz_id"], LEARNER, owner=owner)
+                # A retry must check ownership even when an attempt is already saved.
+                with self.assertRaises(LookupError):
+                    self.store.submit(owned["quiz_id"], LEARNER, [], owner=owner)
+        self.assertEqual(self.make_store().attempt(owned["quiz_id"], LEARNER, LEARNER), result)
+        self.assertEqual(self.store.submit(owned["quiz_id"], LEARNER, [], LEARNER), result)
+
+    def test_history_and_progress_only_include_matching_quiz_owner(self):
+        self.submit()
+        owned = self.store.issue("private", questions(), owner=LEARNER)
+        self.store.submit(owned["quiz_id"], LEARNER, [None] * 4, LEARNER)
+        for owner, quiz_id, correct in [
+            (None, self.quiz["quiz_id"], 2),
+            (LEARNER, owned["quiz_id"], 0),
+        ]:
+            with self.subTest(owner=owner):
+                history = self.make_store().history(LEARNER, owner=owner)
+                self.assertEqual([attempt["quiz_id"] for attempt in history], [quiz_id])
+                self.assertEqual(
+                    self.store.progress(LEARNER, owner=owner)["topic_scores"]["Numbers"],
+                    {"correct": correct, "total": 2},
+                )
+        self.assertEqual(self.store.history(LEARNER, owner=OTHER), [])
+        self.assertEqual(self.store.progress(LEARNER, owner=OTHER), {"topic_scores": {}})
+
     def test_saved_attempt_is_returned_as_submitted(self):
         result = self.submit()
         self.assertEqual(self.make_store().attempt(self.quiz["quiz_id"], LEARNER), result)
@@ -257,6 +288,8 @@ class FileAttemptTests(AttemptStoreContract, unittest.TestCase):
         return AttemptStore(self.directory)
 
     def save_raw_attempt(self, learner_id, quiz_id, record):
+        if not (self.directory / "quizzes" / f"{quiz_id}.json").exists():
+            self.save_raw_quiz(quiz_id, questions())
         folder = self.directory / "attempts" / learner_id
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"{quiz_id}.json").write_text(json.dumps(record))
@@ -340,6 +373,11 @@ class PostgresAttemptTests(AttemptStoreContract, PostgresTestCase):
         return PostgresAttemptStore(self.database)
 
     def save_raw_attempt(self, learner_id, quiz_id, record):
+        self.execute(
+            "INSERT INTO quizzes (quiz_id, document_id, questions) VALUES (%s, 'doc1', %s::json)"
+            " ON CONFLICT (quiz_id) DO NOTHING",
+            (quiz_id, json.dumps(questions())),
+        )
         self.execute(
             "INSERT INTO attempts (learner_id, quiz_id, document_id, created_at, result)"
             " VALUES (%s, %s, 'doc1', now(), %s::json) ON CONFLICT (learner_id, quiz_id)"

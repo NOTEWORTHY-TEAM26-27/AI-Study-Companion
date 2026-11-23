@@ -254,10 +254,11 @@ Limits:
   each new login also deletes all expired sessions; as files, unused ones stay. Database
   backups and backups of `/data/documents` include password hashes and token hashes,
   but no plain passwords or tokens.
-- Turning accounts off after students used them hides their documents and quizzes.
-  Their attempts stay under their account ID, readable with `X-Learner-Id` by
-  anyone who knows that account ID (only that student has seen it, in submit and
-  attempt responses).
+- Turning accounts off after students used them hides their documents, quizzes,
+  attempts and topic scores. An anonymous `X-Learner-Id` cannot read or replay an
+  account-owned attempt. Turning accounts back on restores access after login.
+  Ownership comes from the issued quiz, so keep quiz records with their attempts;
+  attempts whose original quiz is missing are hidden because ownership cannot be verified.
 - A PDF uploaded by several students is embedded and kept in memory once per student,
   because embedding search keeps vectors by document ID.
 
