@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard · AI study companion</title>
+
+  <link rel="stylesheet" href="navbar.css">
+  <link rel="stylesheet" href="theme.css">
+  <style>
+
+  directory {
+    margin: 0; min-height: 100vh; display: flex;
+    flex-direction: column; justify-content: center; align-items: center;
+  }
+
+  </style>
+</head>
+<body>
+  <div id="navbar"></div>
+
+  <directory>
+    <h1>Ask your notes.</h1>
+    <section>
+      <button id="libDirectory" data-url="./library.html">Library</button>
+      <button id="studyDirectory" data-url="./study.html">Study</button>
+    </section>
+    <p class="eyebrow">NoteWorthy / AI Study Companion</p>
+  </directory>
+
+
+<script src="navbar.js"></script>
+<script>
+
+const libDirectory = document.getElementById("libDirectory")
+const studyDirectory = document.getElementById("studyDirectory")
+
+libDirectory.onclick = () => { 
+  window.location.href = libDirectory.dataset.url;
+};
+
+studyDirectory.onclick = () => { 
+  window.location.href = studyDirectory.dataset.url;
+};
+
+
+</script>
+</body>
+</html>
