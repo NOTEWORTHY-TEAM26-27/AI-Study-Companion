@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quiz · AI study companion</title>
+
+<link rel="stylesheet" href="theme.css">
+
+<style>
+
+    button:hover { background: #4f4f4f; }
+    .radial-progress-container {
+    display: flex; justify-content: center;
+    align-items: center; font-family: system-ui, sans-serif;
+    }
+    .radial-progress { 
+    position: relative; width: 160px; height: 160px;
+    }
+    .radial-progress svg {
+    transform: rotate(-90deg);
+    }
+    .radial-progress circle {
+    fill: none; stroke-width: 12px; stroke-linecap: round;
+    }
+    .radial-progress .track {
+    stroke: #e6e6e6;
+    }
+    .radial-progress .fill {
+    stroke: #000000; stroke-dasharray: var(--circumference);
+    stroke-dashoffset: calc(var(--circumference) - (var(--circumference) * var(--progress)) / 100);
+    transition: stroke-dashoffset 0.6s ease-in-out;
+    }
+    .radial-progress .percentage {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 1.5rem; font-weight: bold; color: #333;
+    }
+    .progress-text {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      display: flex; justify-content: center; align-items: center;
+      font-size: 24px; font-weight: bold; color: var(--text-color);
+    }
+    score-section {
+         border: 1px solid #000; padding: 18px; 
+         display: flex; gap: 14px;
+    }
+    .result-options {
+        display: flex; flex-direction: row; flex-wrap: nowrap;
+        justify-content: center; align-items: center;
+        gap: 8px; min-height: 48px;
+    }
+    .result-info {
+    display: flex; flex-direction: column; flex-wrap: nowrap;
+    justify-content: flex-start; align-items: stretch; gap: 4px;
+    }
+    .large-text { font-size: 24px; font-weight: bold; }
+    input:hover {background-color: #f5f5f5;}
+
+</style>
+
+<section id="quiz-prep">
+    <p>When you are ready, press begin.</p>
+    <button id="startQuiz">Begin</button>
+</section>
+
+<div id="results" hidden>
+    <score-section>
+    <label>Your score</label>
+    <div class="radial-progress-container">
+        <div class="radial-progress" style="--progress: 0;" role="progressbar" aria-valuenow="70" aria-valuemin="0" aria-valuemax="100">
+            <svg width="160" height="160" viewBox="0 0 160 160">
+            <circle class="track" cx="80" cy="80" r="70"/>
+            <circle class="fill" cx="80" cy="80" r="70"/>
+            </svg>
+            <div class="percentage">0%</div>
+        </div>
+    </div>
+    <div class="result-info" style="margin-left:48px">
+        <label>Correct:</label>
+        <label class="large-text" id="question-total">5 / 5</label>
+        <header></header>
+        <label>Time:</label>
+        <label class="large-text">00:00</label>
+    </div>
+    <div class="result-info" style="margin-left:48px">
+        <button id="endQuiz" data-url="./study.html">Return to Study</button>
+    </div>
+
+    </score-section>
+    <section>
+    <div id="topicScores">
+    </section>
+
+</div>
+
+</div>
+
+<div id="quiz">
+</div>
+
+<label id="test-print"></label>
+
+<script>
+    let currentQuestion = 0;
+    let totalQuestions = 0;
+
+    let selectedDocument = null;
+    let currentQuizId = null;
+    let storedDocuments = [];
+    let pendingUploads = [];
+    let askBusy = false;
+    let quizBusy = false;
+    let scoreRequest = 0;
+    const MAX_PDF_BYTES = 12 * 1024 * 1024;
+    const MY_DOCUMENTS_KEY = 'noteworthy-my-documents';
+    const SELECTED_DOCUMENT_KEY = 'noteworthy-selected-document';
+    const LEARNER_KEY = 'noteworthy-learner-id';
+
+    const fileInput = document.getElementById('file-input');
+  
+
+  let learnerId;
+  try { learnerId = localStorage.getItem(LEARNER_KEY); } catch (error) { /* storage unavailable */ }
+  if (!/^[0-9a-f]{32}$/.test(learnerId || '')) {
+    learnerId = [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  try { localStorage.setItem(LEARNER_KEY, learnerId); } catch (error) { /* this session only */ }
+  const STATUS_LABELS = {processing: 'Processing…', ready: 'Ready', failed: 'Failed'};
+  const $ = id => document.getElementById(id);
+
+    async function api(path, body) {
+      const response = await fetch(path, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'The server is not responding. Try again in a minute.');
+      return data;
+    }
+
+
+    $("startQuiz").onclick = async () => { 
+        $("quiz-prep").remove();
+        try {
+            const params = new URLSearchParams(window.location.search);
+            currentQuizId = params.get('quizId');
+            const quiz = JSON.parse(localStorage.getItem(currentQuizId));
+            if (quiz) {
+                const questions = quiz.questions;
+                const container = $('quiz'); container.replaceChildren();
+                const readers = questions.map((item, index) => {
+                    const block = document.createElement('div'); block.className = 'quiz-question';
+                    block.id = `q${index}`; block.hidden = !block.hidden;
+                    const title = document.createElement('strong'); title.textContent = `${index + 1}. ${item.question}`;
+                    block.append(title); container.append(block);
+                    // Close questions send an option index; the shared schema sends a letter or True/False.
+                    const radios = item.options ? item.options.map((option, choice) => [choice, option])
+                    : item.type === 'True/False' ? [['True', 'True'], ['False', 'False']]
+                    : item.type === 'Multiple Choice' ? Object.entries(item.choices).map(([key, text]) => [key, `${key}. ${text}`])
+                    : null;
+                    if (radios) {
+                    radios.forEach(([value, text]) => {
+                        const label = document.createElement('label');
+                        const radio = document.createElement('input'); radio.type = 'radio'; radio.name = `q${index}`; radio.value = value;
+                        label.append(radio, ` ${text}`); block.append(label);
+                    });
+                    return () => {
+                        const chosen = document.querySelector(`input[name=q${index}]:checked`);
+                        return chosen ? (item.options ? Number(chosen.value) : chosen.value) : null;
+                    };
+                    }
+                    // One text box per blank, or one for a short answer.
+                    const count = item.type === 'Fill-in-the-Blank' ? Math.max(1, item.question.split('_____').length - 1) : 1;
+                    const boxes = Array.from({length: count}, (_, blank) => {
+                    const label = document.createElement('label'); label.textContent = count > 1 ? `Question ${index + 1}, blank ${blank + 1}` : `Answer to question ${index + 1}`;
+                    const box = document.createElement('input'); box.type = 'text'; box.value = '';
+                    label.append(box); block.append(label); return box;
+                    });
+                    return () => {
+                    const values = boxes.map(box => box.value.trim());
+                    if (values.every(value => !value)) return null;
+                    return count > 1 ? values : values[0];
+                    };
+                });
+
+                totalQuestions = container.childElementCount;
+                const submit = document.createElement('button');
+                submit.textContent = 'Submit'; submit.hidden = !submit.hidden;
+
+                const previous = document.createElement('button');
+                const next = document.createElement('button');
+                previous.textContent = 'Previous'; next.textContent = 'Next';
+
+                previous.onclick = () => {
+                    if (currentQuestion == totalQuestions - 1) { 
+                        next.hidden = !next.hidden; submit.hidden = !submit.hidden;
+                    }
+                    currentQuestion--;
+                    if (currentQuestion == 0) { 
+                        previous.hidden = !previous.hidden;
+                    }
+                    const pQuestion = document.getElementById(`q${currentQuestion}`);
+                    const nQuestion = document.getElementById(`q${currentQuestion + 1}`);
+                    pQuestion.hidden = !pQuestion.hidden; nQuestion.hidden = !nQuestion.hidden;
+                }
+                previous.hidden = !previous.hidden;
+                next.onclick = () => {
+                    if (currentQuestion == 0) { previous.hidden = !previous.hidden; }
+                    currentQuestion++;
+                    if (currentQuestion == totalQuestions - 1) { 
+                        next.hidden = !next.hidden; submit.hidden = !submit.hidden;
+                    }
+                    const pQuestion = document.getElementById(`q${currentQuestion - 1}`);
+                    const nQuestion = document.getElementById(`q${currentQuestion}`);
+                    pQuestion.hidden = !pQuestion.hidden; nQuestion.hidden = !nQuestion.hidden;
+                }
+                container.append(previous); container.append(next);
+                document.getElementById('q0').hidden = !document.getElementById('q0').hidden;
+
+                submit.onclick = async () => {
+                    const answers = readers.map(read => read());
+                    try {
+                        const graded = await api('/api/quiz/submit', {quiz_id: quiz.quiz_id, learner_id: learnerId, answers});
+
+                        for (const item of graded.results) {
+                            const note = document.createElement('p');
+                            note.textContent = `${item.correct ? 'Correct' : `Answer: ${[].concat(item.expected_answer).join(', ')}`} · ${item.source_id}, page ${item.page}`;
+                            container.children[graded.results.indexOf(item)].append(note);
+                            if (container.children[graded.results.indexOf(item)].id == `q${totalQuestions - 1}`) {
+                                continue;
+                            } else {
+                                container.children[graded.results.indexOf(item)].hidden = !container.children[graded.results.indexOf(item)].hidden;
+                            }
+                        }
+                        //$('quizResult').textContent = `Score: ${graded.correct} / ${graded.total}`;
+                        //await loadScores(documentId); //For topic scores
+
+                        document.querySelectorAll('input[type="radio"]').forEach(radio => {
+                            radio.disabled = true;
+                        });
+
+                        previous.hidden = !previous.hidden;
+                        submit.hidden = !submit.hidden;
+
+                        results(graded.correct, graded.total);
+                        showScores(graded.topic_scores);
+
+                        // It works! Just set to show everything and tinker with the results screen!
+
+                    } catch (error) {
+                        if (selectedDocument && selectedDocument.id === documentId && currentQuizId === result.quiz_id) {
+                            return;
+                        }
+                    }
+                };
+
+
+                container.append(submit);
+
+            }
+    } catch (error) {
+      return;
+    }
+    }
+
+
+    $("endQuiz").onclick = () => {
+        window.location.href = $("endQuiz").dataset.url;
+    }
+
+
+    function setMainScore(element, value) {
+        const clamp = Math.max(0, Math.min(100, value));
+        element.style.setProperty('--progress', clamp);
+        element.setAttribute('aria-valuenow', clamp);
+        const label = element.querySelector('.percentage');
+        if (label) {
+            label.textContent = `${clamp}%`;
+        }
+    }
+
+    function showScores(scores) {
+        const container = $('topicScores'); container.replaceChildren();
+        const entries = Object.entries(scores);
+        for (const [topic, values] of entries) {
+        const percent = Math.round(100 * values.correct / values.total);
+        const row = document.createElement('div'); row.className = 'scorebar';
+        const title = document.createElement('div'); title.textContent = `${topic}: ${percent}% (${values.correct}/${values.total})`;
+        const bar = document.createElement('span'); bar.style.width = `${percent}%`;
+        row.append(title, bar); container.append(row);
+        }
+    }
+
+    function results(correct, total) {
+        let results = document.getElementById("results");
+        results.hidden = !results.hidden;
+        let resultInfo = document.getElementById("result-info");
+
+        let label = document.getElementById("question-total");
+        label.textContent = correct + " / " + total;
+
+        let score = (correct / total) * 100;
+
+        const progressBar = document.querySelector('.radial-progress');
+        setMainScore(progressBar, score);
+        $("endQuiz").disabled = false;
+    }
+
+    $("endQuiz").disabled = true;
+
+
+</script>
