@@ -228,8 +228,6 @@
                                 container.children[graded.results.indexOf(item)].hidden = !container.children[graded.results.indexOf(item)].hidden;
                             }
                         }
-                        //$('quizResult').textContent = `Score: ${graded.correct} / ${graded.total}`;
-                        //await loadScores(documentId); //For topic scores
 
                         document.querySelectorAll('input[type="radio"]').forEach(radio => {
                             radio.disabled = true;
@@ -240,8 +238,6 @@
 
                         results(graded.correct, graded.total);
                         showScores(graded.topic_scores);
-
-                        // It works! Just set to show everything and tinker with the results screen!
 
                     } catch (error) {
                         if (selectedDocument && selectedDocument.id === documentId && currentQuizId === result.quiz_id) {

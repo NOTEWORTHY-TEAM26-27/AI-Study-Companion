@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signup</title>
+  <link rel="stylesheet" href="theme.css">
+
+  <style>
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      grid-template-rows: repeat(9, 1fr);
+      gap: 0 10px;
+      min-height: 100vh;
+    }
+
+    .box {
+      grid-area: 1 / 4 / 10 / 10;
+      background: #f4f4f48a;
+      border: 2px solid #000000;
+    }
+    .message-border {grid-area: 2 / 6 / 3 / 8;}
+    .input-box { grid-area: 3 / 6 / 7 / 8; }
+    .noteworthy-corner { grid-area: 9 / 8 / 10 / 10; }
+    .confirm-box {
+      grid-area: 7 / 6 / 8 / 8;
+      display: grid; place-items: center;
+    }
+
+    .custom-input {
+      box-sizing: border-box;
+      width: 360px;
+      max-width: 100%;
+      padding: 10px 14px 10px 14px;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.4;
+      color: #111827;
+      background: #ffffff;
+      border: 0;
+      border-bottom: 1.5px solid #d1d5db;
+      border-radius: 0;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .custom-input:focus {
+      outline: none; border-bottom-color: #000000; box-shadow: inset 0 -1px 0 #000000;
+    }
+
+  </style>
+</head>
+<body>
+  <div class="grid">
+    <div class="box"></div>
+    <div class="message-border">
+      <h1>Sign Up</h1>
+    </div>
+    <div class="input-box">
+        <label class="custom-input-label" for="field">First Name*</label>
+        <input class="custom-input" id="field" name="field" type="text">
+        <label class="custom-input-label" for="field" style="margin-top:12px">Last Name*</label>
+        <input class="custom-input" id="field" name="field" type="text">
+        <label class="custom-input-label" for="field" style="margin-top:12px">Email*</label>
+        <input class="custom-input" id="field" name="field" type="email">
+        <label class="custom-input-label" for="field" style="margin-top:12px">Password*</label>
+        <input class="custom-input" id="field" name="field" type="password" placeholder="Must be 8 or more characters">
+        <label style="margin-top:18px"></label>
+        <label id="status" style="margin-top:24px"></label>
+    </div>
+    <div class="confirm-box">
+      <button id="signup-confirm">
+        Create Account
+      </button>
+      <a href="./login.html" style="margin-top:12px">Have an account? Login here!</a>
+    </div>
+    <div class="noteworthy-corner">
+      <p class="eyebrow">NoteWorthy / AI Study Companion</p>
+    </div>
+  </div>
+
+</body>
+<script>
+
+const signUp = document.getElementById("signup-confirm");
+const warning = document.getElementById("status");
+
+async function api(path, body) {
+    const response = await fetch(path, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'The server is not responding. Try again in a minute.');
+    return data;
+}
+
+
+function warningMessage(message) {
+    warning.textContent = message;
+}
+
+signUp.onclick = async () => {
+    let credentials = {}
+    document.querySelectorAll('input').forEach(item => {
+        if (item.value.trim() === '') {
+            warningMessage("The " + item.type + " is empty!");
+            return;
+        } else {
+            credentials[item.type] = item.value;
+        }
+    });
+
+    try {
+        // Accounts are not fully implemented across the AI Study companion, so this section is blanked out.
+        /*
+        const account = await api('/api/signup', {email: credentials.email, password: credentials.password, class_code: ""});
+        if (account) {
+            window.location.href = "./dashboard.html?account=" + account.email;
+        }
+        */
+        window.location.href = "./dashboard.html";
+
+    } catch(error) {
+        warningMessage(error.message);
+    }
+}
+
+
+
+</script>
+
+
+</html>

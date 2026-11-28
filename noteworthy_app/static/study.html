@@ -47,6 +47,7 @@
 
 <section style="margin-top:18px">
   <h2>Scores by topic</h2>
+  <label id="selected"></label>
   <header></header>
   <div id="topicScores"></div>
   <button id="makeQuiz" data-url="./quiz.html">Start Quiz</button>
@@ -157,6 +158,7 @@
       currentQuizId = null;
     }
     selectedDocument = uploadedDocument;
+    $("selected").textContent = selectedDocument.name;
     try { localStorage.setItem(SELECTED_DOCUMENT_KEY, uploadedDocument.id); } catch (error) { /* this session only */ }
 
     $('ask').disabled = askBusy;
