@@ -1069,6 +1069,106 @@ class AccountServerTests(unittest.TestCase):
             (200, {"topic_scores": {"Page 1": {"correct": 0, "total": 5}}}),
         )
 
+    def test_two_active_students_have_separate_data(self):
+        alice = self.sign_up("a@uta.edu")
+        bob = self.sign_up("b@uta.edu")
+        alice_doc = self.upload(alice, "alice.pdf")
+        bob_doc = self.upload(bob, "bob.pdf")
+        self.assertNotEqual(alice_doc, bob_doc)
+        alice_quiz, alice_result = self.quiz_and_submit(alice, alice_doc)
+        bob_quiz, bob_result = self.quiz_and_submit(bob, bob_doc)
+        self.assertNotEqual(alice_quiz["quiz_id"], bob_quiz["quiz_id"])
+        for token, own_doc, other_doc, own_quiz, other_quiz, result in [
+            (alice, alice_doc, bob_doc, alice_quiz, bob_quiz, alice_result),
+            (bob, bob_doc, alice_doc, bob_quiz, alice_quiz, bob_result),
+        ]:
+            with self.subTest(document=own_doc):
+                status, documents = self.get("/api/documents", token)
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    [item["id"] for item in documents["documents"]],
+                    [own_doc],
+                )
+                status, attempts = self.get("/api/attempts", token)
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    [item["quiz_id"] for item in attempts["attempts"]],
+                    [own_quiz["quiz_id"]],
+                )
+                self.assertEqual(
+                    self.get(f"/api/attempts/{own_quiz['quiz_id']}", token),
+                    (200, result),
+                )
+                self.assertEqual(
+                    self.get(f"/api/attempts/{other_quiz['quiz_id']}", token)[0],
+                    404,
+                )
+                self.assertEqual(
+                    self.get(f"/api/quiz/{other_quiz['quiz_id']}", token)[0],
+                    404,
+                )
+                self.assertEqual(
+                    self.post("/api/quiz", {"document_id": other_doc}, token)[0],
+                    404,
+                )
+                self.assertEqual(
+                    self.get(f"/api/progress?document_id={other_doc}", token),
+                    (200, {"topic_scores": {}}),
+                )
+
+    def test_active_students_cannot_forge_learner_ids(self):
+        alice = self.sign_up("a@uta.edu")
+        bob = self.sign_up("b@uta.edu")
+        alice_id = self.account_id("a@uta.edu")
+        bob_id = self.account_id("b@uta.edu")
+        alice_doc = self.upload(alice, "alice.pdf")
+        bob_doc = self.upload(bob, "bob.pdf")
+        alice_quiz, alice_result = self.quiz_and_submit(alice, alice_doc)
+        forged_headers = {"X-Learner-Id": alice_id}
+
+        self.assertEqual(
+            self.get(
+                f"/api/attempts/{alice_quiz['quiz_id']}",
+                bob,
+                forged_headers,
+            )[0],
+            404,
+        )
+        # Bob tries to submit Alice's quiz using her learner ID.
+        payload = {
+            "quiz_id": alice_quiz["quiz_id"],
+            "learner_id": alice_id,
+            "answers": [None] * len(alice_quiz["questions"]),
+        }
+        self.assertEqual(
+            self.post("/api/quiz/submit", payload, bob)[0],
+            404,
+        )
+        # Bob submits his own quiz with Alice's learner ID.
+        status, bob_quiz = self.post("/api/quiz", {"document_id": bob_doc}, bob)
+        self.assertEqual(status, 200)
+        payload = {
+            "quiz_id": bob_quiz["quiz_id"],
+            "learner_id": alice_id,
+            "answers": [None] * len(bob_quiz["questions"]),
+        }
+        status, bob_result = self.post("/api/quiz/submit", payload, bob)
+        self.assertEqual(status, 200)
+        self.assertEqual(bob_result["learner_id"], bob_id)
+        # Alice's original result remains unchanged.
+        self.assertEqual(
+            self.get(f"/api/attempts/{alice_quiz['quiz_id']}", alice),
+            (200, alice_result),
+        )
+        # Each student's history contains only their own quiz.
+        for token, quiz in [(alice, alice_quiz), (bob, bob_quiz)]:
+            status, history = self.get("/api/attempts", token)
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                [item["quiz_id"] for item in history["attempts"]],
+                [quiz["quiz_id"]],
+            )
+
     def test_same_pdf_from_two_students_is_kept_twice(self):
         alice, bob = self.sign_up("a@uta.edu"), self.sign_up("b@uta.edu")
         first = self.upload(alice, "alice.pdf")
