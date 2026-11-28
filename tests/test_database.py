@@ -213,6 +213,106 @@ class PostgresServerTests(PostgresTestCase):
         self.assertEqual(self.execute("SELECT count(*) FROM attempts"), [(1,)])
         self.assertEqual(self.execute("SELECT count(*) FROM sessions"), [(2,)])
 
+    def test_postgres_students_only_see_their_own_data(self):
+        self.assertIsInstance(self.server.attempts, PostgresAttemptStore)
+        self.assertIsInstance(self.server.accounts.store, PostgresAccountStore)
+
+        students = []
+
+        for email, filename in [
+            ("a@uta.edu", "alice.pdf"),
+            ("b@uta.edu", "bob.pdf"),
+        ]:
+            account = {
+                "email": email,
+                "password": PASSWORD,
+                "class_code": CLASS_CODE,
+            }
+
+            status, headers, body = self.request("/api/signup", account)
+            self.assertEqual((status, body), (201, {"email": email}))
+
+            token = headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+
+            pdf = {
+                "name": filename,
+                "data": base64.b64encode(study_pdf()).decode(),
+            }
+
+            status, _, document = self.request("/api/upload", pdf, token)
+            self.assertEqual(status, 200)
+
+            status, _, quiz = self.request("/api/quiz", {"document_id": document["id"]}, token)
+            self.assertEqual(status, 200)
+
+            answers = {
+                "quiz_id": quiz["quiz_id"],
+                "answers": [None] * len(quiz["questions"]),
+            }
+
+            status, _, result = self.request("/api/quiz/submit", answers, token)
+            self.assertEqual(status, 200)
+
+            students.append((token, document, quiz, result))
+
+        alice, bob = students
+
+        self.assertNotEqual(alice[1]["id"], bob[1]["id"])
+        self.assertNotEqual(alice[2]["quiz_id"], bob[2]["quiz_id"])
+
+        for own, other in [(alice, bob), (bob, alice)]:
+            token, document, quiz, result = own
+            _, other_document, other_quiz, _ = other
+
+            with self.subTest(document=document["id"]):
+                status, _, listed = self.request("/api/documents", token=token)
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    [item["id"] for item in listed["documents"]],
+                    [document["id"]],
+                )
+
+                status, _, history = self.request("/api/attempts", token=token)
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    [item["quiz_id"] for item in history["attempts"]],
+                    [quiz["quiz_id"]],
+                )
+
+                status, _, saved = self.request(f"/api/attempts/{quiz['quiz_id']}", token=token)
+                self.assertEqual((status, saved), (200, result))
+
+                status, _, _ = self.request(f"/api/attempts/{other_quiz['quiz_id']}", token=token)
+                self.assertEqual(status, 404)
+
+                status, _, _ = self.request(f"/api/quiz/{other_quiz['quiz_id']}", token=token)
+                self.assertEqual(status, 404)
+
+                status, _, _ = self.request(
+                    "/api/quiz",
+                    {"document_id": other_document["id"]},
+                    token,
+                )
+                self.assertEqual(status, 404)
+
+                status, _, progress = self.request(
+                    f"/api/progress?document_id={other_document['id']}",
+                    token=token,
+                )
+                self.assertEqual((status, progress), (200, {"topic_scores": {}}))
+
+                status, _, _ = self.request(
+                    "/api/quiz/submit",
+                    {
+                        "quiz_id": other_quiz["quiz_id"],
+                        "answers": [None] * len(other_quiz["questions"]),
+                    },
+                    token,
+                )
+                self.assertEqual(status, 404)
+
+        self.assertEqual(self.execute("SELECT count(*) FROM attempts"), [(2,)])
+
 
 if __name__ == "__main__":
     unittest.main()
